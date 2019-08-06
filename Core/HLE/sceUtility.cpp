@@ -66,6 +66,15 @@
 #define PSP_USB_MODULE_CAM 4 // Requires PSP_USB_MODULE_ACC loading first
 #define PSP_USB_MODULE_GPS 5 // Requires PSP_USB_MODULE_ACC loading first
 
+static const char* UsbModuleNames[] = {
+	"<error>",
+	"PSP_USB_MODULE_PSPCM",
+	"PSP_USB_MODULE_ACC",
+	"PSP_USB_MODULE_MIC",
+	"PSP_USB_MODULE_CAM",
+	"PSP_USB_MODULE_GPS"
+};
+
 const int SCE_ERROR_MODULE_BAD_ID = 0x80111101;
 const int SCE_ERROR_MODULE_ALREADY_LOADED = 0x80111102;
 const int SCE_ERROR_MODULE_NOT_LOADED = 0x80111103;
@@ -1046,25 +1055,27 @@ static int sceUtilityGameSharingGetStatus() {
 	return 0;
 }
 
-static u32 sceUtilityLoadUsbModule(u32 module)
+static int sceUtilityLoadUsbModule(u32 module)
 {
 	if (module < 1 || module > 5)
 	{
-		ERROR_LOG(SCEUTILITY, "sceUtilityLoadUsbModule(%i): invalid module id", module);
+		ERROR_LOG_REPORT(SCEUTILITY, "sceUtilityLoadUsbModule(%i): invalid module id", module);
+		return 0;
 	}
 
-	ERROR_LOG_REPORT(SCEUTILITY, "UNIMPL sceUtilityLoadUsbModule(%i)", module);
+	ERROR_LOG_REPORT(SCEUTILITY, "UNIMPL sceUtilityLoadUsbModule(%i - %s)", module, UsbModuleNames[module]);
 	return 0;
 }
 
-static u32 sceUtilityUnloadUsbModule(u32 module)
+static int sceUtilityUnloadUsbModule(u32 module)
 {
 	if (module < 1 || module > 5)
 	{
-		ERROR_LOG(SCEUTILITY, "sceUtilityUnloadUsbModule(%i): invalid module id", module);
+		ERROR_LOG_REPORT(SCEUTILITY, "sceUtilityUnloadUsbModule(%i): invalid module id", module);
+		return 0;
 	}
 
-	ERROR_LOG_REPORT(SCEUTILITY, "UNIMPL sceUtilityUnloadUsbModule(%i)", module);
+	ERROR_LOG_REPORT(SCEUTILITY, "UNIMPL sceUtilityUnloadUsbModule(%i - %s)", module, UsbModuleNames[module]);
 	return 0;
 }
 
@@ -1135,8 +1146,8 @@ const HLEFunction sceUtility[] =
 	{0XD81957B7, &WrapI_V<sceUtilityScreenshotGetStatus>,          "sceUtilityScreenshotGetStatus",          'i', ""   },
 	{0X86A03A27, &WrapI_U<sceUtilityScreenshotContStart>,          "sceUtilityScreenshotContStart",          'i', "x"  },
 
-	{0X0D5BC6D2, &WrapU_U<sceUtilityLoadUsbModule>,                "sceUtilityLoadUsbModule",                'x', "x"  },
-	{0XF64910F0, &WrapU_U<sceUtilityUnloadUsbModule>,              "sceUtilityUnloadUsbModule",              'x', "x"  },
+	{0X0D5BC6D2, &WrapI_U<sceUtilityLoadUsbModule>,                "sceUtilityLoadUsbModule",                'i', "x"  },
+	{0XF64910F0, &WrapI_U<sceUtilityUnloadUsbModule>,              "sceUtilityUnloadUsbModule",              'i', "x"  },
 
 	{0X24AC31EB, &WrapI_U<sceUtilityGamedataInstallInitStart>,     "sceUtilityGamedataInstallInitStart",     'i', "x"  },
 	{0X32E32DCB, &WrapI_V<sceUtilityGamedataInstallShutdownStart>, "sceUtilityGamedataInstallShutdownStart", 'i', ""   },
