@@ -289,6 +289,7 @@ void __KernelDoState(PointerWrap &p)
 		__AACDoState(p);
 		__UsbGpsDoState(p);
 		__UsbMicDoState(p);
+		__UsbCamDoState(p);
 
 		// IMPORTANT! Add new sections last!
 	}
