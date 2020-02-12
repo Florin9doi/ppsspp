@@ -1041,3 +1041,30 @@ HRESULT GetDefaultStride(IMFMediaType *pType, LONG *plStride)
 	}
 	return hr;
 }
+
+std::vector<std::string> __win32_getDeviceList() {
+	if (winCamera) {
+		return winCamera->getDeviceList();
+	}
+	return std::vector<std::string>();
+}
+
+int __win32_startCapture(int width, int height) {
+	if (winCamera) {
+		if (winCamera->isShutDown()) {
+			delete winCamera;
+			winCamera = new WindowsCaptureDevice(CAPTUREDEVIDE_TYPE::VIDEO);
+			winCamera->sendMessage({ CAPTUREDEVIDE_COMMAND::INITIALIZE, nullptr });
+		}
+		void* resolution = static_cast<void*>(new std::vector<int>({ width, height }));
+		winCamera->sendMessage({ CAPTUREDEVIDE_COMMAND::START, resolution });
+	}
+	return 0;
+}
+
+int __win32_stopCapture() {
+	if (winCamera) {
+		winCamera->sendMessage({ CAPTUREDEVIDE_COMMAND::STOP, nullptr });
+	}
+	return 0;
+}

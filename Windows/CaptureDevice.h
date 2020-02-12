@@ -256,3 +256,7 @@ protected:
 
 extern WindowsCaptureDevice *winCamera;
 extern WindowsCaptureDevice *winMic;
+
+std::vector<std::string> __win32_getDeviceList();
+int __win32_startCapture(int width, int height);
+int __win32_stopCapture();

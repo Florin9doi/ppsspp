@@ -21,6 +21,20 @@
 #ifdef USE_FFMPEG
 void convert_frame(int inw, int inh, unsigned char *inData, AVPixelFormat inFormat,
 					int outw, int outh, unsigned char **outData, int *outLen) {
+
+	int cropw, croph;
+	if ((float)inw / inh < (float)outw / outh) {
+		cropw = inw;
+		croph = inw * outh / outw;
+	} else {
+		cropw = inh * outw / outh;
+		croph = inh;
+	}
+	ERROR_LOG(HLE, "convert_frame : %dx%d > %dx%d > %dx%d",
+		inw, inh,
+		cropw, croph,
+		outw, outh);
+
 	struct SwsContext *sws_context = sws_getContext(
 				inw, inh, inFormat,
 				outw, outh, AV_PIX_FMT_RGB24,
