@@ -283,6 +283,12 @@ const HLEFunction SysMemForKernel[] = {
 	{ 0x8AE776AF, &WrapU_UIU<sceKernelMemset>,                     "sceKernelMemset",                    'x', "xix",   HLE_KERNEL_SYSCALL },
 	{ 0xC90B0992, &WrapI_IU<sceKernelGetUIDcontrolBlock>,          "sceKernelGetUIDcontrolBlock",        'i', "ix",    HLE_KERNEL_SYSCALL },
 	{ 0x310802A9, &WrapI_U<SysMemForKernel_310802A9>,              "SysMemForKernel_310802A9",           'i', "x",     HLE_KERNEL_SYSCALL },
+	{ 0x191c6f98, nullptr,                                         "sceKernelUnk1",                      '?', ""   },
+	{ 0x96bfe779, nullptr,                                         "sceKernelUnk2",                      '?', ""   },
+	{ 0x9baa857e, nullptr,                                         "sceKernelUnk3",                      '?', ""   },
+	{ 0xc2a8c491, nullptr,                                         "sceKernelUnk4",                      '?', ""   },
+	{ 0xc6a782da, nullptr,                                         "sceKernelUnk5",                      '?', ""   },
+	{ 0xf5780daa, nullptr,                                         "sceKernelUnk6",                      '?', ""   },
 };
 
 void Register_SysMemForKernel() {

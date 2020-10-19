@@ -206,6 +206,7 @@ void __KernelShutdown()
 	__UsbCamShutdown();
 	__UsbMicShutdown();
 	__UsbGpsShutdown();
+	__UsbShutdown();
 
 	__AudioCodecShutdown();
 	__VideocodecShutdown();
