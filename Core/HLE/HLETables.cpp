@@ -174,7 +174,7 @@ const HLEFunction KDebugForKernel[] =
 	{0X9B868276, nullptr,                                            "sceKernelGetDebugPutchar",                '?', ""   },
 	{0XE146606D, nullptr,                                            "sceKernelRegisterDebugPutchar",           '?', ""   },
 	{0X7CEB2C09, &WrapU_V<sceKernelRegisterKprintfHandler>,          "sceKernelRegisterKprintfHandler",         'x', "",       HLE_KERNEL_SYSCALL },
-	{0X84F370BC, nullptr,                                            "Kprintf",                                 '?', ""   },
+	{0X84F370BC, &WrapV_C<Kprintf>,                                  "Kprintf",                                 'v', "s",      HLE_KERNEL_SYSCALL },
 	{0X5CE9838B, nullptr,                                            "sceKernelDebugWrite",                     '?', ""   },
 	{0X66253C4E, nullptr,                                            "sceKernelRegisterDebugWrite",             '?', ""   },
 	{0XDBB5597F, nullptr,                                            "sceKernelDebugRead",                      '?', ""   },

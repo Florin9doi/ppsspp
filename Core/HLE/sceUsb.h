@@ -22,3 +22,30 @@ void Register_sceUsb();
 void __UsbInit();
 void __UsbDoState(PointerWrap &p);
 
+typedef struct {
+	u32 name;
+	int endpoints;
+	u32 endp; // struct UsbEndpoint *endp;
+	u32 intp; // struct UsbInterface* intp;
+	u32 devp_hi;
+	u32 confp_hi;
+	u32 devp;
+	u32 confp;
+	u32 str; // struct StringDescriptor* str;
+	u32 recvctl_func; // struct DeviceRequest* req);
+	u32 intf_chang_func;
+	u32 attach_func;
+	u32 detach_func;
+	u32 unk34;
+	u32 start_func;
+	u32 stop_func;
+	u32 link; // struct PspUsbDriver* link;
+} PspUsbDriver;
+
+namespace Usbd {
+	typedef struct {
+		PspUsbDriver pspUsbDriver;
+	} Config;
+
+	PspUsbDriver *getUsbDriver();
+}

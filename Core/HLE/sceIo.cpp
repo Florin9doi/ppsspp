@@ -44,6 +44,7 @@
 #include "Core/HLE/FunctionWrappers.h"
 #include "Core/HLE/sceKernel.h"
 #include "Core/HLE/sceUmd.h"
+#include "Core/HLE/sceUsb.h"
 #include "Core/HW/Display.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/HW/MemoryStick.h"
@@ -2002,6 +2003,22 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 				return ERROR_MEMSTICK_DEVCTL_BAD_PARAMS;
 			}
 			break;
+		}
+	}
+
+	if (!strcmp(name, "usbpspcm:"))
+	{
+		switch (cmd) {
+		case 0x03415001: // register USB thread
+			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {  // NOTE: not outPtr
+				u32 threadID = Memory::Read_U32(argAddr);
+				ERROR_LOG(SCEIO, "threadID = 0x%08x/%d", threadID, threadID);
+				__KernelChangeThreadState(threadID, THREADSTATUS_RUNNING);
+			}
+		case 0x03415002: // unregister USB thread
+		default:
+			ERROR_LOG(SCEIO, "UNIMPL sceIoDevctl(\"%s\", %08x, %08x, %i, %08x, %i)", name, cmd, argAddr, argLen, outPtr, outLen);
+			return 0;
 		}
 	}
 

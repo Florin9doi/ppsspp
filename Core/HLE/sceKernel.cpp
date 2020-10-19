@@ -349,6 +349,11 @@ u32 sceKernelRegisterKprintfHandler()
 	return 0;
 }
 
+void Kprintf(const char* format)
+{
+	ERROR_LOG(SCEKERNEL, "Kprintf : %s", format);
+}
+
 int sceKernelRegisterDefaultExceptionHandler()
 {
 	ERROR_LOG(SCEKERNEL, "UNIMPL sceKernelRegisterDefaultExceptionHandler()");

@@ -23,6 +23,7 @@
 #include "Core/HLE/KernelWaitHelpers.h"
 #include "Core/HLE/sceKernelThread.h"
 #include "Core/HLE/sceUsb.h"
+#include "Core/MemMapHelpers.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/Reporting.h"
 
@@ -37,6 +38,7 @@ static bool usbActivated = false;
 
 static int usbWaitTimer = -1;
 static std::vector<SceUID> waitingThreads;
+static Usbd::Config sceUsbConfig; // TODO: move in namespace
 
 enum UsbStatus {
 	USB_STATUS_STOPPED      = 0x001,
@@ -122,6 +124,7 @@ void __UsbInit() {
 	waitingThreads.clear();
 
 	usbWaitTimer = CoreTiming::RegisterEvent("UsbWaitTimeout", UsbWaitExecTimeout);
+	memset(&sceUsbConfig, 0, sizeof(Usbd::Config));
 }
 
 void __UsbDoState(PointerWrap &p) {
@@ -151,6 +154,25 @@ static int sceUsbStart(const char* driverName, u32 argsSize, u32 argsPtr) {
 	INFO_LOG(HLE, "sceUsbStart(%s, %i, %08x)", driverName, argsSize, argsPtr);
 	usbStarted = true;
 	UsbUpdateState();
+
+	if (Usbd::getUsbDriver()->name != NULL &&
+			strcmp(driverName, (const char*)Memory::GetPointer(Usbd::getUsbDriver()->name)) == 0) {
+		if (Usbd::getUsbDriver()->start_func != NULL) {
+			u32 args[2] = { argsSize, argsPtr };
+			hleEnqueueCall((u32)Usbd::getUsbDriver()->start_func, 2, args);
+		}
+
+		if (Usbd::getUsbDriver()->attach_func != NULL) {
+			u32 args[3] = { 1, 0, 0 };
+			hleEnqueueCall((u32)Usbd::getUsbDriver()->attach_func, 3, args);
+		}
+
+		if (Usbd::getUsbDriver()->intf_chang_func != NULL) {
+			u32 args[3] = { 1, 1, 0 };
+			hleEnqueueCall((u32)Usbd::getUsbDriver()->intf_chang_func, 3, args);
+		}
+	}
+
 	return 0;
 }
 
@@ -245,9 +267,41 @@ const HLEFunction sceUsbstorBoot[] =
 	{0XA55C9E16, nullptr,                            "sceUsbstorBootUnregisterNotify",          '?', ""   },
 };
 
+PspUsbDriver* Usbd::getUsbDriver() {
+	return &sceUsbConfig.pspUsbDriver;
+}
+
+static int sceUsbbdRegister(u32 usbDrvAddr) {
+	INFO_LOG(HLE, "sceUsbbdRegister");
+	if (Memory::IsValidRange(usbDrvAddr, sizeof(PspUsbDriver))) {
+		Memory::ReadStruct(usbDrvAddr, Usbd::getUsbDriver());
+	}
+	INFO_LOG(HLE, "sceUsbbdRegister name : %s", Memory::GetPointer(Usbd::getUsbDriver()->name));
+	INFO_LOG(HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
+	INFO_LOG(HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
+	INFO_LOG(HLE, "sceUsbbdRegister detach : %x", Usbd::getUsbDriver()->detach_func);
+	INFO_LOG(HLE, "sceUsbbdRegister start_func : %x", Usbd::getUsbDriver()->start_func);
+	INFO_LOG(HLE, "sceUsbbdRegister stop_func : %x", Usbd::getUsbDriver()->stop_func);
+	return 0;
+}
+
+const HLEFunction sceUsbBus_driver[] =
+{
+	{0x23E51D8F, nullptr,                            "sceUsbbdReqSend",                         '?', ""   },
+	{0x913EC15D, nullptr,                            "sceUsbbdReqRecv",                         '?', ""   },
+	{0x951A24CC, nullptr,                            "sceUsbbdClearFIFO",                       '?', ""   },
+	{0xB1644BE7, &WrapI_U<sceUsbbdRegister>,         "sceUsbbdRegister",                        'i', "x"  },
+	{0xC1E2A540, nullptr,                            "sceUsbbdUnregister",                      '?', ""   },
+	{0xC5E53685, nullptr,                            "sceUsbbdReqCancelAll",                    '?', ""   },
+	{0xCC57EC9D, nullptr,                            "sceUsbbdReqCancel",                       '?', ""   },
+	{0xE65441C1, nullptr,                            "sceUsbbdStall",                           '?', ""   },
+};
+
 void Register_sceUsb()
 {
 	RegisterModule("sceUsbstor", ARRAY_SIZE(sceUsbstor), sceUsbstor);
 	RegisterModule("sceUsbstorBoot", ARRAY_SIZE(sceUsbstorBoot), sceUsbstorBoot);
 	RegisterModule("sceUsb", ARRAY_SIZE(sceUsb), sceUsb);
+	RegisterModule("sceUsb_driver", ARRAY_SIZE(sceUsb), sceUsb);
+	RegisterModule("sceUsbBus_driver", ARRAY_SIZE(sceUsbBus_driver), sceUsbBus_driver);
 }
