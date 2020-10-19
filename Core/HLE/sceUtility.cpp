@@ -40,6 +40,7 @@
 #include "Core/HLE/sceKernel.h"
 #include "Core/HLE/sceKernelInterrupt.h"
 #include "Core/HLE/sceKernelMemory.h"
+#include "Core/HLE/sceKernelModule.h"
 #include "Core/HLE/sceKernelThread.h"
 #include "Core/HLE/sceKernelModule.h"
 #include "Core/HLE/scePower.h"
@@ -672,6 +673,11 @@ static int LoadModuleInternal(u32 module, bool av) {
 	if (info->notify) {
 		info->notify(1, address, allocSize);
 	}
+
+	if ((module & ~0xff) == 0x200) {
+		sceUtilityLoadUsbModule(module == 0x200 ? PSP_USB_MODULE_PSPCM : module - 0x1fe);
+	}
+
 	return 0;
 }
 
@@ -1438,7 +1444,13 @@ static u32 sceUtilityLoadUsbModule(u32 module)
 		ERROR_LOG(Log::sceUtility, "sceUtilityLoadUsbModule(%i): invalid module id", module);
 	}
 
-	ERROR_LOG_REPORT(Log::sceUtility, "UNIMPL sceUtilityLoadUsbModule(%i)", module);
+	if (module == PSP_USB_MODULE_PSPCM) {
+		int modId = sceKernelLoadModule("flash0:/kd/usbpspcm.prx", 0, 0);
+		INFO_LOG(Log::sceUtility, "sceKernelLoadModule flash0:/kd/usbpspcm.prx : modid=%d", modId);
+		int ret = __KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
+		INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbpspcm.prx = %d", ret);
+	}
+
 	return hleNoLog(0);
 }
 
@@ -1449,7 +1461,11 @@ static u32 sceUtilityUnloadUsbModule(u32 module)
 		ERROR_LOG(Log::sceUtility, "sceUtilityUnloadUsbModule(%i): invalid module id", module);
 	}
 
-	ERROR_LOG_REPORT(Log::sceUtility, "UNIMPL sceUtilityUnloadUsbModule(%i)", module);
+	ERROR_LOG(Log::sceUtility, "UNIMPL sceUtilityUnloadUsbModule(%i)", module);
+	if (module == PSP_USB_MODULE_PSPCM)
+		sceUtilityUnloadModule(0x200);
+	else
+		sceUtilityUnloadModule(0x1fe + module);
 	return hleNoLog(0);
 }
 

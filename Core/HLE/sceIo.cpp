@@ -46,6 +46,7 @@
 #include "Core/HLE/sceKernel.h"
 #include "Core/HLE/sceUmd.h"
 #include "Core/HLE/sceChnnlsv.h"
+#include "Core/HLE/sceUsb.h"
 #include "Core/HW/Display.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/HW/MemoryStick.h"
@@ -2011,6 +2012,29 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 		}
 	}
 
+	if (!strcmp(name, "usbpspcm:")) {
+		switch (cmd) {
+		case 0x03415001: // register USB thread
+			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
+				u32 threadID = Memory::Read_U32(argAddr);
+				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : register USB : threadID = 0x%08x/%d", threadID, threadID);
+				return 0;
+			}
+			break;
+		case 0x03415002: // unregister USB thread
+			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
+				u32 threadID = Memory::Read_U32(argAddr);
+				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : unregister USB : threadID = 0x%08x/%d", threadID, threadID);
+				return 0;
+			}
+			break;
+		case 0x03435005: // Bind
+		default:
+			ERROR_LOG(Log::sceIo, "UNIMPL sceIoDevctl(\"%s\", %08x, %08x, %i, %08x, %i)", name, cmd, argAddr, argLen, outPtr, outLen);
+			return 0;
+		}
+	}
+
 	if (!strcmp(name, "kemulator:") || !strcmp(name, "emulator:")) {
 		// Emulator special tricks!
 		
@@ -2413,6 +2437,35 @@ public:
 	std::vector<PSPFileInfo> listing;
 	int index;
 };
+
+typedef struct {
+	u32 name;
+	u32 dev_type;
+	u32 unk2;
+	u32 description;
+	u32 funcs;
+} IoDrv;
+IoDrv gIoDrv;
+
+static int sceIoAddDrv(u32 drvAddr) {
+	ERROR_LOG(Log::sceIo, "sceIoAddDrv");
+	auto& ioDrv = PSPPointer<IoDrv>::Create(drvAddr);
+	if (ioDrv.IsValid()) {
+		ioDrv.NotifyRead("sceIoAddDrv");
+		gIoDrv = *ioDrv;
+	}
+	ERROR_LOG(Log::sceIo, "    name = %s", Memory::GetPointer(gIoDrv.name));
+	ERROR_LOG(Log::sceIo, "    dev_type = %s", gIoDrv.dev_type);
+	ERROR_LOG(Log::sceIo, "    unk2 = %s", gIoDrv.unk2);
+	ERROR_LOG(Log::sceIo, "    name = %s", Memory::GetPointer(gIoDrv.name));
+	ERROR_LOG(Log::sceIo, "    funcs = %s", gIoDrv.funcs);
+	return 0;
+}
+
+static int sceIoDelDrv(const char* name) {
+	ERROR_LOG(Log::sceIo, "sceIoDelDrv(%s)", name);
+	return 0;
+}
 
 static u32 sceIoDopen(const char *path) {
 	if (!path) {
@@ -3041,8 +3094,8 @@ const HLEFunction IoFileMgrForKernel[] = {
 	{0XA905B705, nullptr,                               "sceIoCloseAll",               '?', ""        },
 	{0X411106BA, nullptr,                               "sceIoGetThreadCwd",           '?', ""        },
 	{0XCB0A151F, nullptr,                               "sceIoChangeThreadCwd",        '?', ""        },
-	{0X8E982A74, nullptr,                               "sceIoAddDrv",                 '?', ""        },
-	{0XC7F35804, nullptr,                               "sceIoDelDrv",                 '?', ""        },
+	{0X8E982A74, &WrapI_U<sceIoAddDrv>,                 "sceIoAddDrv",                 'i', "x",      HLE_KERNEL_SYSCALL },
+	{0XC7F35804, &WrapI_C<sceIoDelDrv>,                 "sceIoDelDrv",                 'i', "s",      HLE_KERNEL_SYSCALL },
 	{0X3C54E908, nullptr,                               "sceIoReopen",                 '?', ""        },
 	{0xB29DDF9C, &WrapU_C<sceIoDopen>,                  "sceIoDopen",                  'i', "s",      HLE_KERNEL_SYSCALL },
 	{0xE3EB004C, &WrapU_IU<sceIoDread>,                 "sceIoDread",                  'i', "ix",     HLE_KERNEL_SYSCALL },

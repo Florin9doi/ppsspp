@@ -74,6 +74,9 @@ using namespace std::placeholders;
 #include "Core/Screenshot.h"
 #include "UI/ImDebugger/ImDebugger.h"
 #include "Core/HLE/__sceAudio.h"
+#include "Core/HLE/HLE.h"
+#include "Core/HLE/sceKernelMemory.h"
+#include "Core/HLE/sceUsb.h"
 #include "Core/HW/Display.h"
 
 #include "UI/BackgroundAudio.h"
@@ -750,6 +753,56 @@ void EmuScreen::OnVKey(VirtKey virtualKeyCode, bool down) {
 	auto mc = GetI18NCategory(I18NCat::MAPPABLECONTROLS);
 
 	switch (virtualKeyCode) {
+
+	// hijack some keys :
+	case VIRTKEY_SPEED_CUSTOM1:
+	case VIRTKEY_SPEED_CUSTOM2:
+	case VIRTKEY_FRAME_ADVANCE:
+	case VIRTKEY_REWIND:
+		if (Usbd::getUsbDriver()->recvctl_func != NULL && down) {
+			u32 structSize = sizeof(DeviceRequest);
+			u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
+			DeviceRequest *req = (DeviceRequest*) Memory::GetPointer(dataBufAddr);
+
+			if (0) {}
+			else if (VIRTKEY_SPEED_CUSTOM1 == virtualKeyCode) {
+				// UsbPspcm - p1
+				req->bmRequestType = 0x41;
+				req->bRequest      = 0x07;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0004;
+			}
+			else if (VIRTKEY_SPEED_CUSTOM2 == virtualKeyCode) {
+				// UsbPspcm - p2
+				req->bmRequestType = 0xC1;
+				req->bRequest      = 0x08;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0004;
+			}
+			else if (VIRTKEY_FRAME_ADVANCE == virtualKeyCode) {
+				// UsbPspcm - p3
+				req->bmRequestType = 0xC1;
+				req->bRequest      = 0x01;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0040;
+			}
+			else if (VIRTKEY_REWIND == virtualKeyCode) {
+				// UsbPspcm - p4
+				req->bmRequestType = 0x41;
+				req->bRequest      = 0x02;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x000c;
+			}
+
+			u32 args[3] = { 0x00, 0x22, dataBufAddr };
+			hleEnqueueCall(Usbd::getUsbDriver()->recvctl_func, 3, args);
+		}
+		return;
+
 	case VIRTKEY_FASTFORWARD:
 		if (down && !NetworkWarnUserIfOnlineAndCantSpeed() && !bootPending_) {
 			/*
@@ -764,6 +817,7 @@ void EmuScreen::OnVKey(VirtKey virtualKeyCode, bool down) {
 		}
 		break;
 
+	/*
 	case VIRTKEY_SPEED_CUSTOM1:
 		if (down && !NetworkWarnUserIfOnlineAndCantSpeed()) {
 			if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
@@ -790,6 +844,7 @@ void EmuScreen::OnVKey(VirtKey virtualKeyCode, bool down) {
 			}
 		}
 		break;
+	*/
 
 	case VIRTKEY_RAPID_FIRE:
 		__CtrlSetRapidFire(down, g_Config.iRapidFireInterval);
@@ -956,6 +1011,7 @@ void EmuScreen::ProcessVKey(VirtKey virtKey) {
 		}
 		break;
 
+	/*
 	case VIRTKEY_REWIND:
 		if (!Achievements::WarnUserIfHardcoreModeActive(false) && !NetworkWarnUserIfOnlineAndCantSavestate() && !bootPending_) {
 			if (SaveState::CanRewind()) {
@@ -965,6 +1021,7 @@ void EmuScreen::ProcessVKey(VirtKey virtKey) {
 			}
 		}
 		break;
+	*/
 
 	case VIRTKEY_PAUSE_NO_MENU:
 		if (!NetworkWarnUserIfOnlineAndCantSpeed()) {
@@ -998,6 +1055,7 @@ void EmuScreen::ProcessVKey(VirtKey virtKey) {
 		break;
 	}
 
+	/*
 	case VIRTKEY_FRAME_ADVANCE:
 		// Can't do this reliably in an async fashion, so we just set a variable.
 		// Is this used by anyone? There's no user-friendly way to resume, other than PAUSE_NO_MENU or the debugger.
@@ -1010,6 +1068,7 @@ void EmuScreen::ProcessVKey(VirtKey virtKey) {
 			}
 		}
 		break;
+	*/
 
 	case VIRTKEY_SPEED_TOGGLE:
 		if (!NetworkWarnUserIfOnlineAndCantSpeed()) {

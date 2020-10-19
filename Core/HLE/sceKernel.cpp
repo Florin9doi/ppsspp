@@ -195,6 +195,7 @@ void __KernelShutdown()
 	__UsbCamShutdown();
 	__UsbMicShutdown();
 	__UsbGpsShutdown();
+	__UsbShutdown();
 
 	__AudioCodecShutdown();
 	__VideoPmpShutdown();
@@ -361,6 +362,40 @@ u32 sceKernelDevkitVersion()
 
 u32 sceKernelRegisterKprintfHandler() {
 	return hleLogWarning(Log::sceKernel, 0, "UNIMPL");
+}
+
+void Kprintf() {
+	const char* fmt = Memory::GetCharPointer(PARAM(0));
+	int nr = 0;
+	for (int i = 0; fmt[i] != 0; i++) {
+		if (fmt[i] == '%') {
+			nr++;
+			if (nr == 5) {
+				break;
+			}
+		}
+	}
+	switch (nr) {
+	case 5:
+		ERROR_LOG(Log::sceKernel, fmt, PARAM(1), PARAM(2), PARAM(3), PARAM(4), PARAM(5));
+		return;
+	case 4:
+		ERROR_LOG(Log::sceKernel, fmt, PARAM(1), PARAM(2), PARAM(3), PARAM(4));
+		return;
+	case 3:
+		ERROR_LOG(Log::sceKernel, fmt, PARAM(1), PARAM(2), PARAM(3));
+		return;
+	case 2:
+		ERROR_LOG(Log::sceKernel, fmt, PARAM(1), PARAM(2));
+		return;
+	case 1:
+		ERROR_LOG(Log::sceKernel, fmt, PARAM(1));
+		return;
+	case 0:
+		ERROR_LOG(Log::sceKernel, fmt);
+		return;
+	}
+	ERROR_LOG(Log::sceKernel, "Kprintf : %s", fmt);
 }
 
 int sceKernelRegisterDefaultExceptionHandler() {

@@ -21,4 +21,67 @@ void Register_sceUsb();
 
 void __UsbInit();
 void __UsbDoState(PointerWrap &p);
+void __UsbShutdown();
 
+typedef struct {
+	u32 unk1;
+	u32 unk2;
+	u32 numInterfaces;
+} UsbInterface;
+
+typedef struct {
+	u32 endpointAddres;
+	u32 unk1;
+	u32 unk2;
+} UsbEndpoint;
+
+typedef struct {
+	u32 name;
+	int endpoints;
+	u32 endp; // struct UsbEndpoint *endp;
+	u32 intp; // struct UsbInterface* intp;
+	u32 devp_hi;
+	u32 confp_hi;
+	u32 devp;
+	u32 confp;
+	u32 str; // struct StringDescriptor* str;
+	u32 recvctl_func; // struct DeviceRequest* req); // used to pull data from a PSP game
+	u32 intf_chang_func;
+	u32 attach_func;
+	u32 detach_func;
+	u32 configure_func;
+	u32 start_func;
+	u32 stop_func;
+	u32 link; // struct PspUsbDriver* link;
+} PspUsbDriver;
+
+typedef struct {
+	u8 bmRequestType;
+	u8 bRequest;
+	u16 wValue;
+	u16 wIndex;
+	u16 wLength;
+} DeviceRequest;
+
+typedef struct {
+	u32 endpointPtr;
+	u32 data;
+	u32 size;
+	u32 isControlRequest;
+	u32 onComplete_func;
+	u32 transmitted;
+	u32 returnCode;
+	u32 nextRequest;
+	u32 arg;
+	u32 link;
+} UsbdDeviceRequest;
+
+namespace Usbd {
+	typedef struct {
+		PspUsbDriver pspUsbDriver;
+		//UsbdDeviceRequest usbDevReq;
+	} Config;
+
+	PspUsbDriver* getUsbDriver();
+	//UsbdDeviceRequest* getUsbDevReq();
+}
