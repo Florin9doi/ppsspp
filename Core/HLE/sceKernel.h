@@ -387,7 +387,7 @@ void sceKernelExitGameWithStatus();
 u32 sceKernelDevkitVersion();
 
 u32 sceKernelRegisterKprintfHandler();
-void Kprintf(const char* format);
+void Kprintf();
 int sceKernelRegisterDefaultExceptionHandler();
 
 u32 sceKernelFindModuleByName(const char *name);
