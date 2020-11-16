@@ -199,6 +199,11 @@ static int sceUsbActivate(u32 pid) {
 		hleEnqueueCall(Usbd::getUsbDriver()->intf_chang_func, 2, args);
 	}
 
+	if (Usbd::getUsbDriver()->configure_func != NULL) {
+		u32 args[3] = { 55, 22, 33}; // usb_version, desc_count, InterfaceSettings
+		hleEnqueueCall(Usbd::getUsbDriver()->configure_func, 3, args);
+	}
+
 	return 0;
 }
 
@@ -303,6 +308,7 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 	INFO_LOG(HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
 	INFO_LOG(HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
 	INFO_LOG(HLE, "sceUsbbdRegister detach : %x", Usbd::getUsbDriver()->detach_func);
+	INFO_LOG(HLE, "sceUsbbdRegister configure : %x", Usbd::getUsbDriver()->configure_func);
 	INFO_LOG(HLE, "sceUsbbdRegister start_func : %x", Usbd::getUsbDriver()->start_func);
 	INFO_LOG(HLE, "sceUsbbdRegister stop_func : %x", Usbd::getUsbDriver()->stop_func);
 	return 0;
