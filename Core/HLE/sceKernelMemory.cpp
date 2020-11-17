@@ -593,7 +593,7 @@ int sceKernelCreateFpl(const char *name, u32 mpid, u32 attr, u32 blockSize, u32 
 		return SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT;
 	}
 	// We only support user right now.
-	if (mpid != 2 && mpid != 6)
+	if (mpid != 2 && mpid != 6 && mpid != 1)
 	{
 		WARN_LOG_REPORT(SCEKERNEL, "%08x=sceKernelCreateFpl(): invalid partition %d", SCE_KERNEL_ERROR_ILLEGAL_PERM, mpid);
 		return SCE_KERNEL_ERROR_ILLEGAL_PERM;

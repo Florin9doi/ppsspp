@@ -151,7 +151,8 @@ void __UsbDoState(PointerWrap &p) {
 }
 
 static int sceUsbStart(const char* driverName, u32 argsSize, u32 argsPtr) {
-	INFO_LOG(HLE, "sceUsbStart(%s, %i, %08x)", driverName, argsSize, argsPtr);
+	INFO_LOG(HLE, "sceUsbStart(%s, %i, %08x : %s)", driverName, argsSize, argsPtr,
+		((argsPtr != 0) ? (const char*)Memory::GetPointer(argsPtr) : ""));
 	usbStarted = true;
 	UsbUpdateState();
 
@@ -185,7 +186,7 @@ static int sceUsbGetState() {
 }
 
 static int sceUsbActivate(u32 pid) {
-	INFO_LOG(HLE, "sceUsbActivate(%i)", pid);
+	INFO_LOG(HLE, "sceUsbActivate(0x%04x)", pid);
 	usbActivated = true;
 	UsbUpdateState();
 
@@ -208,7 +209,7 @@ static int sceUsbActivate(u32 pid) {
 }
 
 static int sceUsbDeactivate(u32 pid) {
-	INFO_LOG(HLE, "sceUsbDeactivate(%i)", pid);
+	INFO_LOG(HLE, "sceUsbDeactivate(0x%04x)", pid);
 	usbActivated = false;
 	UsbUpdateState();
 	return 0;
@@ -277,7 +278,7 @@ PspUsbDriver* Usbd::getUsbDriver() {
 	return &sceUsbConfig.pspUsbDriver;
 }
 
-UsbbdDeviceRequest* Usbd::getUsbDevReq() {
+UsbdDeviceRequest* Usbd::getUsbDevReq() {
 	return &sceUsbConfig.usbDevReq;
 }
 
@@ -286,16 +287,55 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 	if (Memory::IsValidRange(usbDeviceReqAddr, sizeof(PspUsbDriver))) {
 		Memory::ReadStruct(usbDeviceReqAddr, Usbd::getUsbDevReq());
 	}
-	INFO_LOG(HLE, "sceUsbbdReqSend size: %x", Usbd::getUsbDevReq()->size);
+	INFO_LOG(HLE, "sceUsbbdReqSend: IN size: 0x%x", Usbd::getUsbDevReq()->size);
 	for (int i = 0; i < Usbd::getUsbDevReq()->size; i++) {
 		INFO_LOG(HLE, "%02x ", Memory::GetPointer(Usbd::getUsbDevReq()->data)[i]);
 	}
-
 	if (Usbd::getUsbDevReq()->onComplete_func != NULL) {
 		u32 args[1] = { usbDeviceReqAddr };
 		hleEnqueueCall(Usbd::getUsbDevReq()->onComplete_func, 1, args);
 	}
+	return 0;
+}
 
+static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
+	if (Memory::IsValidRange(usbDeviceReqAddr, sizeof(PspUsbDriver))) {
+		Memory::ReadStruct(usbDeviceReqAddr, Usbd::getUsbDevReq());
+	}
+	INFO_LOG(HLE, "sceUsbbdReqRecv size: OUT 0x%x", Usbd::getUsbDevReq()->size);
+	static int step = 0;
+	int ret = 0;
+	if (step == 0) {
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x02;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x05;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x01;
+		step++;
+	} else if (step == 1) {
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x02;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x02;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+
+		// Data size (LE) = 0x1000
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x10;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
+		step++;
+	}
+	for (int i = 0; i < Usbd::getUsbDevReq()->size; i++) {
+		INFO_LOG(HLE, "%02x ", Memory::GetPointer(Usbd::getUsbDevReq()->data)[i]);
+	}
+	if (Usbd::getUsbDevReq()->onComplete_func != NULL && ret > 0) {
+		u32 args[1] = { usbDeviceReqAddr };
+		hleEnqueueCall(Usbd::getUsbDevReq()->onComplete_func, 1, args);
+	}
 	return 0;
 }
 
@@ -306,6 +346,7 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 	}
 	INFO_LOG(HLE, "sceUsbbdRegister name : %s", Memory::GetPointer(Usbd::getUsbDriver()->name));
 	INFO_LOG(HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
+	INFO_LOG(HLE, "sceUsbbdRegister intf_chang : %x", Usbd::getUsbDriver()->intf_chang_func);
 	INFO_LOG(HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
 	INFO_LOG(HLE, "sceUsbbdRegister detach : %x", Usbd::getUsbDriver()->detach_func);
 	INFO_LOG(HLE, "sceUsbbdRegister configure : %x", Usbd::getUsbDriver()->configure_func);
@@ -317,7 +358,7 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 const HLEFunction sceUsbBus_driver[] =
 {
 	{0x23E51D8F, &WrapI_U<sceUsbbdReqSend>,          "sceUsbbdReqSend",                         'i', "x"  },
-	{0x913EC15D, nullptr,                            "sceUsbbdReqRecv",                         '?', ""   },
+	{0x913EC15D, &WrapI_U<sceUsbbdReqRecv>,          "sceUsbbdReqRecv",                         'i', "x"  },
 	{0x951A24CC, nullptr,                            "sceUsbbdClearFIFO",                       '?', ""   },
 	{0xB1644BE7, &WrapI_U<sceUsbbdRegister>,         "sceUsbbdRegister",                        'i', "x"  },
 	{0xC1E2A540, nullptr,                            "sceUsbbdUnregister",                      '?', ""   },

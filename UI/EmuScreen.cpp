@@ -68,6 +68,8 @@
 #include "Core/HLE/__sceAudio.h"
 #include "Core/HLE/proAdhoc.h"
 #include "Core/HLE/Plugins.h"
+#include "Core/HLE/sceKernelMemory.h"
+#include "Core/HLE/sceUsb.h"
 
 #include "UI/BackgroundAudio.h"
 #include "UI/OnScreenDisplay.h"
@@ -505,6 +507,56 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 	auto sc = GetI18NCategory("Screen");
 
 	switch (virtualKeyCode) {
+
+	// hijack some keys :
+	case VIRTKEY_SPEED_CUSTOM1:
+	case VIRTKEY_SPEED_CUSTOM2:
+	case VIRTKEY_FRAME_ADVANCE:
+	case VIRTKEY_REWIND:
+		if (Usbd::getUsbDriver()->recvctl_func != NULL) {
+			u32 structSize = sizeof(DeviceRequest);
+			u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
+			DeviceRequest *req = (DeviceRequest*) Memory::GetPointer(dataBufAddr);
+
+			if (0) {}
+			else if (VIRTKEY_SPEED_CUSTOM1 == virtualKeyCode) {
+				// UsbPspcm - p1
+				req->bmRequestType = 0x41;
+				req->bRequest = 0x07;
+				req->wValue = 0x0000;
+				req->wIndex = 0x0000;
+				req->wLength = 0x0004;
+			}
+			else if (VIRTKEY_SPEED_CUSTOM2 == virtualKeyCode) {
+				// UsbPspcm - p2
+				req->bmRequestType = 0xC1;
+				req->bRequest      = 0x08;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0004;
+			}
+			else if (VIRTKEY_FRAME_ADVANCE == virtualKeyCode) {
+				// UsbPspcm - p3
+				req->bmRequestType = 0xC1;
+				req->bRequest      = 0x01;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0040;
+			}
+			else if (VIRTKEY_REWIND == virtualKeyCode) {
+				// UsbPspcm - p4
+				req->bmRequestType = 0x41;
+				req->bRequest      = 0x02;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x000c;
+			}
+
+			u32 args[3] = { 0x00, 0x22, dataBufAddr };
+			hleEnqueueCall(Usbd::getUsbDriver()->recvctl_func, 3, args);
+		}
+		return;
+
 	case VIRTKEY_UNTHROTTLE:
 		if (coreState == CORE_STEPPING) {
 			Core_EnableStepping(false);
@@ -526,35 +578,36 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 		}
 		break;
 
-	case VIRTKEY_SPEED_CUSTOM1:
-		if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
-			PSP_CoreParameter().fpsLimit = FPSLimit::CUSTOM1;
-			osm.Show(sc->T("fixed", "Speed: alternate"), 1.0);
-		}
-		break;
-	case VIRTKEY_SPEED_CUSTOM2:
-		if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
-			PSP_CoreParameter().fpsLimit = FPSLimit::CUSTOM2;
-			osm.Show(sc->T("SpeedCustom2", "Speed: alternate 2"), 1.0);
-		}
-		break;
+	//case VIRTKEY_SPEED_CUSTOM1:
+	//	if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
+	//		PSP_CoreParameter().fpsLimit = FPSLimit::CUSTOM1;
+	//		osm.Show(sc->T("fixed", "Speed: alternate"), 1.0);
+	//	}
+	//	break;
+
+	//case VIRTKEY_SPEED_CUSTOM2:
+	//	if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
+	//		PSP_CoreParameter().fpsLimit = FPSLimit::CUSTOM2;
+	//		osm.Show(sc->T("SpeedCustom2", "Speed: alternate 2"), 1.0);
+	//	}
+	//	break;
 
 	case VIRTKEY_PAUSE:
 		pauseTrigger_ = true;
 		break;
 
-	case VIRTKEY_FRAME_ADVANCE:
-		// If game is running, pause emulation immediately. Otherwise, advance a single frame.
-		if (Core_IsStepping())
-		{
-			frameStep_ = true;
-			Core_EnableStepping(false);
-		}
-		else if (!frameStep_)
-		{
-			Core_EnableStepping(true);
-		}
-		break;
+	//case VIRTKEY_FRAME_ADVANCE:
+	//	// If game is running, pause emulation immediately. Otherwise, advance a single frame.
+	//	if (Core_IsStepping())
+	//	{
+	//		frameStep_ = true;
+	//		Core_EnableStepping(false);
+	//	}
+	//	else if (!frameStep_)
+	//	{
+	//		Core_EnableStepping(true);
+	//	}
+	//	break;
 
 	case VIRTKEY_OPENCHAT:
 		if (g_Config.bEnableNetworkChat) {
@@ -621,13 +674,13 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 		setVKeyAnalog('Y', CTRL_STICK_RIGHT, VIRTKEY_AXIS_RIGHT_Y_MIN, VIRTKEY_AXIS_RIGHT_Y_MAX, false);
 		break;
 
-	case VIRTKEY_REWIND:
-		if (SaveState::CanRewind()) {
-			SaveState::Rewind(&AfterSaveStateAction);
-		} else {
-			osm.Show(sc->T("norewind", "No rewind save states available"), 2.0);
-		}
-		break;
+	//case VIRTKEY_REWIND:
+	//	if (SaveState::CanRewind()) {
+	//		SaveState::Rewind(&AfterSaveStateAction);
+	//	} else {
+	//		osm.Show(sc->T("norewind", "No rewind save states available"), 2.0);
+	//	}
+	//	break;
 	case VIRTKEY_SAVE_STATE:
 		SaveState::SaveSlot(gamePath_, g_Config.iCurrentStateSlot, &AfterSaveStateAction);
 		break;
@@ -689,16 +742,16 @@ void EmuScreen::onVKeyUp(int virtualKeyCode) {
 		break;
 
 	case VIRTKEY_SPEED_CUSTOM1:
-		if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM1) {
-			PSP_CoreParameter().fpsLimit = FPSLimit::NORMAL;
-			osm.Show(sc->T("standard", "Speed: standard"), 1.0);
-		}
+		//if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM1) {
+		//	PSP_CoreParameter().fpsLimit = FPSLimit::NORMAL;
+		//	osm.Show(sc->T("standard", "Speed: standard"), 1.0);
+		//}
 		break;
 	case VIRTKEY_SPEED_CUSTOM2:
-		if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM2) {
-			PSP_CoreParameter().fpsLimit = FPSLimit::NORMAL;
-			osm.Show(sc->T("standard", "Speed: standard"), 1.0);
-		}
+		//if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM2) {
+		//	PSP_CoreParameter().fpsLimit = FPSLimit::NORMAL;
+		//	osm.Show(sc->T("standard", "Speed: standard"), 1.0);
+		//}
 		break;
 
 	case VIRTKEY_AXIS_X_MIN:

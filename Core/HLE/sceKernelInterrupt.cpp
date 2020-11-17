@@ -863,8 +863,14 @@ const HLEFunction InterruptManager[] =
 	{0XEEE43F47, nullptr,                                      "sceKernelRegisterUserSpaceIntrStack", '?', ""     },
 };
 
+const HLEFunction InterruptManagerForKernel[] =
+{
+	{0x092968f4, nullptr,                                      "sceKernelCpuSuspendIntr",             '?', ""     },
+	{0x5F10D406, nullptr,                                      "sceKernelCpuResumeIntr",              '?', ""     },
+};
 
 void Register_InterruptManager()
 {
 	RegisterModule("InterruptManager", ARRAY_SIZE(InterruptManager), InterruptManager);
+	RegisterModule("InterruptManagerForKernel", ARRAY_SIZE(InterruptManagerForKernel), InterruptManagerForKernel);
 }
