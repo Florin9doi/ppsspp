@@ -1,10 +1,5 @@
 name: Manual Generate iOS IPA
 on:
-  push:
-    branches:
-    - master
-    # For testing.
-    - actions
   workflow_dispatch:
     inputs:
 
