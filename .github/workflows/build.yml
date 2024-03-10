@@ -203,7 +203,7 @@ jobs:
         git fetch --deepen=15000 --no-recurse-submodules --tags || exit 0
 
     - name: Install Qt
-      uses: jurplel/install-qt-action@v3
+      uses: jurplel/install-qt-action@74ca8cd6681420fc8894aed264644c7a76d7c8cb
       if: matrix.extra == 'qt'
       with:
         cache: true
