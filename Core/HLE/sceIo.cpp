@@ -2012,8 +2012,7 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 		case 0x03415001: // register USB thread
 			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {  // NOTE: not outPtr
 				u32 threadID = Memory::Read_U32(argAddr);
-				ERROR_LOG(SCEIO, "threadID = 0x%08x/%d", threadID, threadID);
-				__KernelChangeThreadState(threadID, THREADSTATUS_RUNNING);
+				ERROR_LOG(SCEIO, "register USB : threadID = 0x%08x/%d", threadID, threadID);
 			}
 		case 0x03415002: // unregister USB thread
 		default:
@@ -2430,6 +2429,11 @@ public:
 	std::vector<PSPFileInfo> listing;
 	int index;
 };
+
+static int sceIoAddDrv(u32 drv) {
+	DEBUG_LOG(SCEIO, "sceIoAddDrv");
+	return 0;
+}
 
 static u32 sceIoDopen(const char *path) {
 	DEBUG_LOG(SCEIO, "sceIoDopen(\"%s\")", path);
@@ -3053,7 +3057,7 @@ const HLEFunction IoFileMgrForKernel[] = {
 	{0XA905B705, nullptr,                               "sceIoCloseAll",               '?', ""        },
 	{0X411106BA, nullptr,                               "sceIoGetThreadCwd",           '?', ""        },
 	{0XCB0A151F, nullptr,                               "sceIoChangeThreadCwd",        '?', ""        },
-	{0X8E982A74, nullptr,                               "sceIoAddDrv",                 '?', ""        },
+	{0X8E982A74, &WrapI_U<sceIoAddDrv>,                 "sceIoAddDrv",                 'i', "x",      HLE_KERNEL_SYSCALL },
 	{0XC7F35804, nullptr,                               "sceIoDelDrv",                 '?', ""        },
 	{0X3C54E908, nullptr,                               "sceIoReopen",                 '?', ""        },
 	{0xB29DDF9C, &WrapU_C<sceIoDopen>,                  "sceIoDopen",                  'i', "s",      HLE_KERNEL_SYSCALL },

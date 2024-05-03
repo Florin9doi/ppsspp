@@ -84,6 +84,10 @@ static int sceKernelAllocHeapMemory(int heapId, int size) {
 	return hleLogSuccessInfoX(SCEKERNEL, addr);
 }
 
+static int sceKernelAllocHeapMemoryWithOption(int heapId, int size, u32 opt) {
+	return sceKernelAllocHeapMemory(heapId, size);
+}
+
 static int sceKernelDeleteHeap(int heapId) {
 	u32 error;
 	KernelHeap *heap = kernelObjects.Get<KernelHeap>(heapId, error);

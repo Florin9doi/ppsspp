@@ -74,6 +74,8 @@ using namespace std::placeholders;
 #include "Core/SaveState.h"
 #include "Core/HLE/__sceAudio.h"
 #include "Core/HLE/proAdhoc.h"
+#include "Core/HLE/sceKernelMemory.h"
+#include "Core/HLE/sceUsb.h"
 #include "Core/HW/Display.h"
 
 #include "UI/BackgroundAudio.h"
@@ -644,6 +646,56 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 	auto mc = GetI18NCategory(I18NCat::MAPPABLECONTROLS);
 
 	switch (virtualKeyCode) {
+
+	// hijack some keys :
+	case VIRTKEY_SPEED_CUSTOM1:
+	case VIRTKEY_SPEED_CUSTOM2:
+	case VIRTKEY_FRAME_ADVANCE:
+	case VIRTKEY_REWIND:
+		if (Usbd::getUsbDriver()->recvctl_func != NULL && down) {
+			u32 structSize = sizeof(DeviceRequest);
+			u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
+			DeviceRequest *req = (DeviceRequest*) Memory::GetPointer(dataBufAddr);
+
+			if (0) {}
+			else if (VIRTKEY_SPEED_CUSTOM1 == virtualKeyCode) {
+				// UsbPspcm - p1
+				req->bmRequestType = 0x41;
+				req->bRequest      = 0x07;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0004;
+			}
+			else if (VIRTKEY_SPEED_CUSTOM2 == virtualKeyCode) {
+				// UsbPspcm - p2
+				req->bmRequestType = 0xC1;
+				req->bRequest      = 0x08;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0004;
+			}
+			else if (VIRTKEY_FRAME_ADVANCE == virtualKeyCode) {
+				// UsbPspcm - p3
+				req->bmRequestType = 0xC1;
+				req->bRequest      = 0x01;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x0040;
+			}
+			else if (VIRTKEY_REWIND == virtualKeyCode) {
+				// UsbPspcm - p4
+				req->bmRequestType = 0x41;
+				req->bRequest      = 0x02;
+				req->wValue        = 0x0000;
+				req->wIndex        = 0x0000;
+				req->wLength       = 0x000c;
+			}
+
+			u32 args[3] = { 0x00, 0x22, dataBufAddr };
+			hleEnqueueCall(Usbd::getUsbDriver()->recvctl_func, 3, args);
+		}
+		return;
+
 	case VIRTKEY_FASTFORWARD:
 		if (down) {
 			if (coreState == CORE_STEPPING) {
@@ -671,6 +723,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 		}
 		break;
 
+	/*
 	case VIRTKEY_SPEED_CUSTOM1:
 		if (down) {
 			if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
@@ -697,6 +750,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 			}
 		}
 		break;
+	*/
 
 	case VIRTKEY_PAUSE:
 		if (down) {
@@ -708,6 +762,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 		}
 		break;
 
+	/*
 	case VIRTKEY_FRAME_ADVANCE:
 		if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
 			if (down) {
@@ -721,6 +776,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 			}
 		}
 		break;
+	*/
 
 	case VIRTKEY_OPENCHAT:
 		if (down && g_Config.bEnableNetworkChat) {
@@ -766,6 +822,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 		break;
 #endif
 
+	/*
 	case VIRTKEY_REWIND:
 		if (down && !Achievements::WarnUserIfHardcoreModeActive(false)) {
 			if (SaveState::CanRewind()) {
@@ -775,6 +832,8 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 			}
 		}
 		break;
+	*/
+
 	case VIRTKEY_SAVE_STATE:
 		if (down && !Achievements::WarnUserIfHardcoreModeActive(true)) {
 			SaveState::SaveSlot(gamePath_, g_Config.iCurrentStateSlot, &AfterSaveStateAction);
