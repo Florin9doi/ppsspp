@@ -179,10 +179,81 @@ static int StartServer() {
 		return -3;
 	}
 
-	//fd_util::SetNonBlocking(server_socket, true);
-
 	return server_socket;
 }
+
+class DataPk {
+public:
+	union {
+		u8 pk_buf[0x50];
+		struct {
+			u16 magic;
+			u8 totalLen;
+			u8 endpoint;
+
+			union {
+				u8 buf[8];
+				struct {
+					u8 bmRequestType;
+					u8 bRequest;
+					u16 wValue;
+					u16 wIndex;
+					u16 wLength;
+				};
+			} req;
+			u8 data[0x40];
+		};
+	};
+
+	int getPkLen() {
+		return 12 + req.wLength;
+	}
+
+	int read8(unsigned char* buf, int size, int* offset) {
+		if (*offset < size) {
+			return buf[(*offset)++];
+		}
+		return -1;
+	}
+
+	int read16(unsigned char* buf, int size, int* offset) {
+		if (*offset < size - 1) {
+			int ret = buf[(*offset)++];
+			ret += buf[(*offset)++] << 8;
+			return ret;
+		}
+		return -1;
+	}
+
+public:
+	int read(unsigned char* ptr, int size) {
+		int offset = 0;
+		if (size >= 12) {
+			magic = read16(ptr, size, &offset);
+			ERROR_LOG(HLE, "pspcm_manager : magic %x", magic);
+			if (magic != 0x0ff0) {
+				return 0;
+			}
+			totalLen = read8(ptr, size, &offset);
+			endpoint = read8(ptr, size, &offset);
+
+			req.bmRequestType = read8(ptr, size, &offset);
+			req.bRequest = read8(ptr, size, &offset);
+			req.wValue = read16(ptr, size, &offset);
+			req.wIndex = read16(ptr, size, &offset);
+			req.wLength = read16(ptr, size, &offset);
+		}
+		if (req.wLength) {
+			if (offset + req.wLength <= size) {
+				memcpy(data, ptr + offset, req.wLength);
+			}
+			else {
+				return 0;
+			}
+		}
+		return getPkLen();
+	}
+};
 
 int client;
 char gRecvBuffer[512];
@@ -204,9 +275,10 @@ static void PS3Thread() {
 		unsigned char recvbuf[255];
 		int recvLen;
 
+		DataPk pk = DataPk();
+
 		do {
-			// TODO: split packets
-			// memmove recvLen..sizeof(recvbuf) to 0..recvbuf and read at recvbuf+recvLen
+
 			recvLen = recv(client, (char*) recvbuf, sizeof(recvbuf), 0);
 			if (recvLen <= 0) {
 				ERROR_LOG(HLE, "pspcm_manager: Connection closed (%d)", recvLen);
@@ -221,56 +293,37 @@ static void PS3Thread() {
 			pos += sprintf(arr + pos, "]");
 			ERROR_LOG(HLE, "pspcm_manager: %s", arr);
 
-			auto getPacketLen = [](unsigned char* buf, int len) {
-				return (len > 3
-					&& buf[0] == 0xf0
-					&& buf[1] == 0x0f
-					&& buf[2] <= len)
-					? buf[2] : 0;
-			};
-
-
-			/*
-			recvbuf
-			|
-			|                    bufptr                                                                        recvLen
-			V                    V                                                                             V
-			[][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][]
-			{f00f...............}{f00f...................}{f00f................}{f00f..........}{f00f..........}
-			                     {f00f...................}
-								       ^                 ^
-								       pk                pklen
-
-			*/
-
-			unsigned char* bufptr = recvbuf;
-			int pklen = getPacketLen(bufptr, recvLen);
+			int pklen = pk.read((unsigned char*)recvbuf, recvLen);
+			if (pklen == 0) {
+				continue;
+			}
 			ERROR_LOG(HLE, "pspcm_manager : getPacketLen %d", pklen);
-			while (pklen > 0) {
-				unsigned char* pk = bufptr + 4;
-				bufptr += pklen;
-				recvLen -= pklen;
 
-				u32 structSize = sizeof(DeviceRequest);
-				u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
+			u32 structSize = sizeof(DeviceRequest);
+			u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
 
+
+			if (pk.endpoint == 0) {
 				DeviceRequest *req = (DeviceRequest*) Memory::GetPointer(dataBufAddr);
-				std::memcpy(req, pk, sizeof(DeviceRequest));
+				std::memcpy(req, pk.req.buf, sizeof(DeviceRequest));
 				ERROR_LOG(HLE, "pspcm_manager : req->bmRequestType %x", req->bmRequestType);
 				ERROR_LOG(HLE, "pspcm_manager : req->bRequest %x", req->bRequest);
 				ERROR_LOG(HLE, "pspcm_manager : req->wValue %x", req->wValue);
 				ERROR_LOG(HLE, "pspcm_manager : req->wIndex %x", req->wIndex);
 				ERROR_LOG(HLE, "pspcm_manager : req->wLength %x", req->wLength);
 
+
 				gRecvLen = req->wLength;
 				if (gRecvLen) {
-					memcpy(gRecvBuffer, pk + 8, req->wLength);
+					memcpy(gRecvBuffer, pk.data, req->wLength);
 				}
+				
+				
+				while (pk.req.bRequest == 2);
+
+
 				u32 args[] = { req->bmRequestType, 0, dataBufAddr };
 				hleEnqueueCall(Usbd::getUsbDriver()->recvctl_func, ARRAY_SIZE(args), args);
-
-				pklen = getPacketLen(bufptr, recvLen);
-				ERROR_LOG(HLE, "pspcm_manager : getPacketLen2 %d", pklen);
 			}
 		} while (true);
 	}

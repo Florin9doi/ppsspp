@@ -2012,8 +2012,11 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 		case 0x03415001: // register USB thread
 			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {  // NOTE: not outPtr
 				u32 threadID = Memory::Read_U32(argAddr);
-				ERROR_LOG(SCEIO, "register USB : threadID = 0x%08x/%d", threadID, threadID);
+				ERROR_LOG(SCEIO, "sceIoDevctl : usbpspcm : register USB : threadID = 0x%08x/%d", threadID, threadID);
+				sceKernelStartThread(threadID, 0, 0);
+				return 0;
 			}
+			break;
 		case 0x03415002: // unregister USB thread
 		case 0x03435005: // Bind
 		default:
@@ -2431,8 +2434,32 @@ public:
 	int index;
 };
 
-static int sceIoAddDrv(u32 drv) {
-	DEBUG_LOG(SCEIO, "sceIoAddDrv");
+typedef struct {
+	u32 name;
+	u32 dev_type;
+	u32 unk2;
+	u32 description;
+	u32 funcs;
+} IoDrv;
+IoDrv gIoDrv;
+
+static int sceIoAddDrv(u32 drvAddr) {
+	ERROR_LOG(SCEIO, "sceIoAddDrv");
+	auto& ioDrv = PSPPointer<IoDrv>::Create(drvAddr);
+	if (ioDrv.IsValid()) {
+		ioDrv.NotifyRead("sceIoAddDrv");
+		gIoDrv = *ioDrv;
+	}
+	ERROR_LOG(SCEIO, "    name = %s", Memory::GetPointer(gIoDrv.name));
+	ERROR_LOG(SCEIO, "    dev_type = %s", gIoDrv.dev_type);
+	ERROR_LOG(SCEIO, "    unk2 = %s", gIoDrv.unk2);
+	ERROR_LOG(SCEIO, "    name = %s", Memory::GetPointer(gIoDrv.name));
+	ERROR_LOG(SCEIO, "    funcs = %s", gIoDrv.funcs);
+	return 0;
+}
+
+static int sceIoDelDrv(const char* name) {
+	ERROR_LOG(SCEIO, "sceIoDelDrv(%s)", name);
 	return 0;
 }
 
@@ -3059,7 +3086,7 @@ const HLEFunction IoFileMgrForKernel[] = {
 	{0X411106BA, nullptr,                               "sceIoGetThreadCwd",           '?', ""        },
 	{0XCB0A151F, nullptr,                               "sceIoChangeThreadCwd",        '?', ""        },
 	{0X8E982A74, &WrapI_U<sceIoAddDrv>,                 "sceIoAddDrv",                 'i', "x",      HLE_KERNEL_SYSCALL },
-	{0XC7F35804, nullptr,                               "sceIoDelDrv",                 '?', ""        },
+	{0XC7F35804, &WrapI_C<sceIoDelDrv>,                 "sceIoDelDrv",                 'i', "s",      HLE_KERNEL_SYSCALL },
 	{0X3C54E908, nullptr,                               "sceIoReopen",                 '?', ""        },
 	{0xB29DDF9C, &WrapU_C<sceIoDopen>,                  "sceIoDopen",                  'i', "s",      HLE_KERNEL_SYSCALL },
 	{0xE3EB004C, &WrapU_IU<sceIoDread>,                 "sceIoDread",                  'i', "ix",     HLE_KERNEL_SYSCALL },

@@ -1011,6 +1011,7 @@ const HLEFunction SysclibForKernel[] =
 	{0x52DF196C, &WrapU_U<sysclib_strlen>,                     "strlen",                              'x', "x",      HLE_KERNEL_SYSCALL },
 	{0x81D0D1F7, &WrapI_UUU<sysclib_memcmp>,                   "memcmp",                              'i', "xxx",    HLE_KERNEL_SYSCALL },
 	{0x7661E728, &WrapI_UU<sysclib_sprintf>,                   "sprintf",                             'i', "xx",     HLE_KERNEL_SYSCALL },
+	//{0xc2145e80, &WrapI_UU<sysclib_snprintf>,                  "snprintf",                            'i', "xx",     HLE_KERNEL_SYSCALL },
 	{0x10F3BB61, &WrapU_UII<sysclib_memset>,                   "memset",                              'x', "xii",    HLE_KERNEL_SYSCALL },
 	{0x0D188658, &WrapI_UU<sysclib_strstr>,                    "strstr",                              'i', "xx",     HLE_KERNEL_SYSCALL },
 	{0x7AB35214, &WrapI_UUU<sysclib_strncmp>,                  "strncmp",                             'i', "xxx",    HLE_KERNEL_SYSCALL },
