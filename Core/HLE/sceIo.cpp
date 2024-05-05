@@ -2015,6 +2015,7 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 				ERROR_LOG(SCEIO, "register USB : threadID = 0x%08x/%d", threadID, threadID);
 			}
 		case 0x03415002: // unregister USB thread
+		case 0x03435005: // Bind
 		default:
 			ERROR_LOG(SCEIO, "UNIMPL sceIoDevctl(\"%s\", %08x, %08x, %i, %08x, %i)", name, cmd, argAddr, argLen, outPtr, outLen);
 			return 0;

@@ -38,6 +38,7 @@
 #include "Core/HLE/sceKernel.h"
 #include "Core/HLE/sceKernelInterrupt.h"
 #include "Core/HLE/sceKernelMemory.h"
+#include "Core/HLE/sceKernelModule.h"
 #include "Core/HLE/sceKernelThread.h"
 #include "Core/HLE/scePower.h"
 #include "Core/HLE/sceUtility.h"
@@ -535,6 +536,10 @@ static u32 sceUtilityLoadModule(u32 module) {
 
 	if (info->notify)
 		info->notify(1);
+
+	if ((module & ~0xff) == 0x200) {
+		sceUtilityLoadUsbModule(module == 0x200 ? PSP_USB_MODULE_PSPCM : module - 0x1fe);
+	}
 
 	// TODO: Each module has its own timing, technically, but this is a low-end.
 	if (module == 0x3FF)
@@ -1053,7 +1058,12 @@ static u32 sceUtilityLoadUsbModule(u32 module)
 		ERROR_LOG(SCEUTILITY, "sceUtilityLoadUsbModule(%i): invalid module id", module);
 	}
 
-	ERROR_LOG_REPORT(SCEUTILITY, "UNIMPL sceUtilityLoadUsbModule(%i)", module);
+	if (module == PSP_USB_MODULE_PSPCM) {
+		int modId = sceKernelLoadModule("flash0:/kd/usbpspcm.prx", 0, 0);
+		INFO_LOG(SCEUTILITY, "sceKernelLoadModule flash0:/kd/usbpspcm.prx : modid=%d", modId);
+		int ret = KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
+		INFO_LOG(SCEUTILITY, "KernelStartModule flash0:/kd/usbpspcm.prx = %d", ret);
+	}
 	return 0;
 }
 
@@ -1065,6 +1075,10 @@ static u32 sceUtilityUnloadUsbModule(u32 module)
 	}
 
 	ERROR_LOG_REPORT(SCEUTILITY, "UNIMPL sceUtilityUnloadUsbModule(%i)", module);
+	if (module == PSP_USB_MODULE_PSPCM)
+		sceUtilityUnloadModule(0x200);
+	else
+		sceUtilityUnloadModule(0x1fe + module);
 	return 0;
 }
 

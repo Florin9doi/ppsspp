@@ -96,3 +96,4 @@ void UtilityDialogInitialize(UtilityDialogType type, int delayUs, int priority);
 void UtilityDialogShutdown(UtilityDialogType type, int delayUs, int priority);
 
 void Register_sceUtility();
+u32 sceUtilityLoadUsbModule(u32 module);

@@ -21,11 +21,34 @@
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/FunctionWrappers.h"
 #include "Core/HLE/KernelWaitHelpers.h"
+#include "Core/HLE/sceKernelMemory.h"
 #include "Core/HLE/sceKernelThread.h"
 #include "Core/HLE/sceUsb.h"
 #include "Core/MemMapHelpers.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/Reporting.h"
+#include <Thread/ThreadUtil.h>
+#include <TimeUtil.h>
+
+#ifdef _WIN32
+#include <WinSock2.h>
+#include <Ws2tcpip.h>
+#ifndef AI_ADDRCONFIG
+#define AI_ADDRCONFIG 0x0400
+#endif
+#undef min
+#undef max
+#else
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <ifaddrs.h>
+#include <unistd.h>
+#endif
+#include <File/FileDescriptor.h>
 
 static constexpr uint32_t ERROR_USB_WAIT_TIMEOUT = 0x80243008;
 
@@ -35,6 +58,8 @@ static bool usbStarted = false;
 static bool usbConnected = true;
 // TODO: Activation by product id
 static bool usbActivated = false;
+
+std::thread ps3_thread;
 
 static int usbWaitTimer = -1;
 static std::vector<SceUID> waitingThreads;
@@ -117,6 +142,146 @@ static void UsbUpdateState() {
 		hleReSchedule("usb state change");
 }
 
+static int StartServer() {
+	struct addrinfo hints {};
+	struct addrinfo* info;
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	if (getaddrinfo("127.0.0.1", "27015", &hints, &info) != 0)
+	{
+		ERROR_LOG(HLE, "pspcm_manager: getaddrinfo error");
+		return -1;
+	}
+
+	int server_socket = socket(info->ai_family, info->ai_socktype, info->ai_protocol);
+	if (server_socket == -1)
+	{
+		ERROR_LOG(HLE, "pspcm_manager: Error creating socket");
+		freeaddrinfo(info);
+		return -2;
+	}
+
+	if (bind(server_socket, info->ai_addr, info->ai_addrlen) != 0)
+	{
+		ERROR_LOG(HLE, "pspcm_manager: Error binding");
+		freeaddrinfo(info);
+		closesocket(server_socket);
+		return -3;
+	}
+	freeaddrinfo(info);
+
+	if (listen(server_socket, 10) != 0)
+	{
+		ERROR_LOG(HLE, "pspcm_manager: Error listening");
+		closesocket(server_socket);
+		return -3;
+	}
+
+	//fd_util::SetNonBlocking(server_socket, true);
+
+	return server_socket;
+}
+
+int client;
+char gRecvBuffer[512];
+int gRecvLen = 0;
+
+static void PS3Thread() {
+	SetCurrentThreadName("PS3Thread");
+
+	int server = StartServer();
+
+	while (usbActivated) {
+		client = accept(server, NULL, NULL);
+		if (client < 0) {
+			ERROR_LOG(HLE, "pspcm_manager: Error accepting");
+			return;
+		}
+
+		int iSendResult;
+		unsigned char recvbuf[255];
+		int recvLen;
+
+		do {
+			// TODO: split packets
+			// memmove recvLen..sizeof(recvbuf) to 0..recvbuf and read at recvbuf+recvLen
+			recvLen = recv(client, (char*) recvbuf, sizeof(recvbuf), 0);
+			if (recvLen <= 0) {
+				ERROR_LOG(HLE, "pspcm_manager: Connection closed (%d)", recvLen);
+				break;
+			}
+
+			char arr[1024];
+			int pos = sprintf(arr, "  >> received: %d [", recvLen);
+			for (int i = 0; i < recvLen; i++) {
+				pos += sprintf(arr + pos, "%02x ", (unsigned char)recvbuf[i]);
+			}
+			pos += sprintf(arr + pos, "]");
+			ERROR_LOG(HLE, "pspcm_manager: %s", arr);
+
+			auto getPacketLen = [](unsigned char* buf, int len) {
+				return (len > 3
+					&& buf[0] == 0xf0
+					&& buf[1] == 0x0f
+					&& buf[2] <= len)
+					? buf[2] : 0;
+			};
+
+
+			/*
+			recvbuf
+			|
+			|                    bufptr                                                                        recvLen
+			V                    V                                                                             V
+			[][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][]
+			{f00f...............}{f00f...................}{f00f................}{f00f..........}{f00f..........}
+			                     {f00f...................}
+								       ^                 ^
+								       pk                pklen
+
+			*/
+
+			unsigned char* bufptr = recvbuf;
+			int pklen = getPacketLen(bufptr, recvLen);
+			ERROR_LOG(HLE, "pspcm_manager : getPacketLen %d", pklen);
+			while (pklen > 0) {
+				unsigned char* pk = bufptr + 4;
+				bufptr += pklen;
+				recvLen -= pklen;
+
+				u32 structSize = sizeof(DeviceRequest);
+				u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
+
+				DeviceRequest *req = (DeviceRequest*) Memory::GetPointer(dataBufAddr);
+				std::memcpy(req, pk, sizeof(DeviceRequest));
+				ERROR_LOG(HLE, "pspcm_manager : req->bmRequestType %x", req->bmRequestType);
+				ERROR_LOG(HLE, "pspcm_manager : req->bRequest %x", req->bRequest);
+				ERROR_LOG(HLE, "pspcm_manager : req->wValue %x", req->wValue);
+				ERROR_LOG(HLE, "pspcm_manager : req->wIndex %x", req->wIndex);
+				ERROR_LOG(HLE, "pspcm_manager : req->wLength %x", req->wLength);
+
+				gRecvLen = req->wLength;
+				if (gRecvLen) {
+					memcpy(gRecvBuffer, pk + 8, req->wLength);
+				}
+				u32 args[] = { req->bmRequestType, 0, dataBufAddr };
+				hleEnqueueCall(Usbd::getUsbDriver()->recvctl_func, ARRAY_SIZE(args), args);
+
+				pklen = getPacketLen(bufptr, recvLen);
+				ERROR_LOG(HLE, "pspcm_manager : getPacketLen2 %d", pklen);
+			}
+		} while (true);
+	}
+}
+
+void send_to_ps3(const char *buf, int len) {
+	int ret = send(client, buf, len, 0);
+	ERROR_LOG(HLE, "pspcm_manager : send_to_ps3 %d", ret);
+}
+
+
 void __UsbInit() {
 	usbStarted = false;
 	usbConnected = true;
@@ -151,16 +316,15 @@ void __UsbDoState(PointerWrap &p) {
 }
 
 static int sceUsbStart(const char* driverName, u32 argsSize, u32 argsPtr) {
-	INFO_LOG(HLE, "sceUsbStart(%s, %i, %08x : %s)", driverName, argsSize, argsPtr,
-		((argsPtr != 0) ? (const char*)Memory::GetPointer(argsPtr) : ""));
+	INFO_LOG(HLE, "sceUsbStart(%s, size=%i, args=%08x)", driverName, argsSize, argsPtr);
 	usbStarted = true;
 	UsbUpdateState();
 
 	if (Usbd::getUsbDriver()->name != NULL &&
 			strcmp(driverName, (const char*)Memory::GetPointer(Usbd::getUsbDriver()->name)) == 0) {
 		if (Usbd::getUsbDriver()->start_func != NULL) {
-			u32 args[2] = { argsSize, argsPtr };
-			hleEnqueueCall(Usbd::getUsbDriver()->start_func, 2, args);
+			u32 args[] = { argsSize, argsPtr };
+			hleEnqueueCall(Usbd::getUsbDriver()->start_func, ARRAY_SIZE(args), args);
 		}
 	}
 
@@ -168,9 +332,18 @@ static int sceUsbStart(const char* driverName, u32 argsSize, u32 argsPtr) {
 }
 
 static int sceUsbStop(const char* driverName, u32 argsSize, u32 argsPtr) {
-	INFO_LOG(HLE, "sceUsbStop(%s, %i, %08x)", driverName, argsSize, argsPtr);
+	INFO_LOG(HLE, "sceUsbStop(%s, size=%i, args=%08x)", driverName, argsSize, argsPtr);
 	usbStarted = false;
 	UsbUpdateState();
+
+	if (Usbd::getUsbDriver()->name != NULL &&
+		strcmp(driverName, (const char*)Memory::GetPointer(Usbd::getUsbDriver()->name)) == 0) {
+		if (Usbd::getUsbDriver()->stop_func != NULL) {
+			u32 args[] = { argsSize, argsPtr };
+			hleEnqueueCall(Usbd::getUsbDriver()->stop_func, ARRAY_SIZE(args), args);
+		}
+	}
+
 	return 0;
 }
 
@@ -188,21 +361,28 @@ static int sceUsbGetState() {
 static int sceUsbActivate(u32 pid) {
 	INFO_LOG(HLE, "sceUsbActivate(0x%04x)", pid);
 	usbActivated = true;
+
+	if (pid == 0x01cb) {
+		ps3_thread = std::thread(&PS3Thread);
+	}
+
 	UsbUpdateState();
 
 	if (Usbd::getUsbDriver()->attach_func != NULL) {
-		u32 args[3] = { 55 }; // usb_version
-		hleEnqueueCall(Usbd::getUsbDriver()->attach_func, 1, args);
-	}
-
-	if (Usbd::getUsbDriver()->intf_chang_func != NULL) {
-		u32 args[3] = { 11, 22 }; // interfaceNumber, alternateSetting
-		hleEnqueueCall(Usbd::getUsbDriver()->intf_chang_func, 2, args);
+		u32 speed = 2; // usb_version : speed 1=full, 2=hi
+		u32 args[] = { speed, 0, 0 };
+		hleEnqueueCall(Usbd::getUsbDriver()->attach_func, ARRAY_SIZE(args), args);
 	}
 
 	if (Usbd::getUsbDriver()->configure_func != NULL) {
-		u32 args[3] = { 55, 22, 33 }; // usb_version, desc_count, InterfaceSettings
-		hleEnqueueCall(Usbd::getUsbDriver()->configure_func, 3, args);
+		u32 speed = 2; // usb_version : speed 1=full, 2=hi
+		u32 args[] = { speed, 0, 0 }; // usb_version
+		hleEnqueueCall(Usbd::getUsbDriver()->configure_func, ARRAY_SIZE(args), args);
+	}
+
+	if (Usbd::getUsbDriver()->intf_chang_func != NULL) {
+		u32 args[] = { 0, 0, 0 }; // interfaceNumber, alternateSetting, unk
+		hleEnqueueCall(Usbd::getUsbDriver()->intf_chang_func, ARRAY_SIZE(args), args);
 	}
 
 	return 0;
@@ -212,6 +392,9 @@ static int sceUsbDeactivate(u32 pid) {
 	INFO_LOG(HLE, "sceUsbDeactivate(0x%04x)", pid);
 	usbActivated = false;
 	UsbUpdateState();
+	if (pid == 0x01cb) {
+		// TODO: stop thread
+	}
 	return 0;
 }
 
@@ -278,28 +461,27 @@ PspUsbDriver* Usbd::getUsbDriver() {
 	return &sceUsbConfig.pspUsbDriver;
 }
 
-UsbdDeviceRequest* Usbd::getUsbDevReq() {
-	return &sceUsbConfig.usbDevReq;
-}
+//UsbdDeviceRequest* Usbd::getUsbDevReq() {
+//	return &sceUsbConfig.usbDevReq;
+//}
 
 static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
-	//INFO_LOG(HLE, "sceUsbbdReqSend");
 	auto usbDeviceReq = PSPPointer<UsbdDeviceRequest>::Create(usbDeviceReqAddr);
 	if (usbDeviceReq.IsValid()) {
-		sceUsbConfig.usbDevReq = *usbDeviceReq;
+		//sceUsbConfig.usbDevReq = *usbDeviceReq;
 		usbDeviceReq.NotifyRead("sceUsbbdReqSend");
 	}
-	//if (Memory::IsValidRange(usbDeviceReqAddr, sizeof(PspUsbDriver))) {
-	//	//Memory::ReadStruct(usbDeviceReqAddr, Usbd::getUsbDevReq());
-	//	Memory::Memcpy(Usbd::getUsbDevReq(), usbDeviceReqAddr, sizeof(UsbdDeviceRequest));
-	//}
-	INFO_LOG(HLE, "sceUsbbdReqSend: IN size: 0x%x", Usbd::getUsbDevReq()->size);
-	for (int i = 0; i < Usbd::getUsbDevReq()->size; i++) {
-		INFO_LOG(HLE, "%02x ", Memory::GetPointer(Usbd::getUsbDevReq()->data)[i]);
+	INFO_LOG(HLE, "sceUsbbdReqSend: sz=0x%x", usbDeviceReq->size);
+	const char* data = (char*) Memory::GetPointer(usbDeviceReq->data);
+	for (int i = 0; i < usbDeviceReq->size; i++) {
+		INFO_LOG(HLE, "    %02x ", data[i]);
 	}
-	if (Usbd::getUsbDevReq()->onComplete_func != NULL) {
-		u32 args[1] = { usbDeviceReqAddr };
-		hleEnqueueCall(Usbd::getUsbDevReq()->onComplete_func, 1, args);
+
+	send_to_ps3(data, usbDeviceReq->size);
+
+	if (usbDeviceReq->onComplete_func != NULL) {
+		u32 args[] = { usbDeviceReqAddr, 0, 0 };
+		hleEnqueueCall(usbDeviceReq->onComplete_func, ARRAY_SIZE(args), args);
 	}
 	return 0;
 }
@@ -307,73 +489,65 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 	auto usbDeviceReq = PSPPointer<UsbdDeviceRequest>::Create(usbDeviceReqAddr);
 	if (usbDeviceReq.IsValid()) {
-		sceUsbConfig.usbDevReq = *usbDeviceReq;
+		//sceUsbConfig.usbDevReq = *usbDeviceReq;
 		usbDeviceReq.NotifyRead("sceUsbbdReqRecv");
 	}
-	//if (Memory::IsValidRange(usbDeviceReqAddr, sizeof(PspUsbDriver))) {
-	//	//Memory::ReadStruct(usbDeviceReqAddr, Usbd::getUsbDevReq());
-	//	Memory::Memcpy(Usbd::getUsbDevReq(), usbDeviceReqAddr, sizeof(UsbdDeviceRequest));
-	//}
-	INFO_LOG(HLE, "sceUsbbdReqRecv size: OUT 0x%x", Usbd::getUsbDevReq()->size);
-	static int step = 0;
+	INFO_LOG(HLE, "sceUsbbdReqRecv: sz=0x%x", usbDeviceReq->size);
 	int ret = 0;
 
+	UsbEndpoint* ep = (UsbEndpoint*) Memory::GetPointer(usbDeviceReq->endpointPtr);
+	INFO_LOG(HLE, "        endpointPtr 0x%02x: %02x %02x %02x",  usbDeviceReq->endpointPtr, ep->endpointAddres, ep->unk1, ep->unk2);
+	INFO_LOG(HLE, "        data: 0x%x", usbDeviceReq->data);
+	INFO_LOG(HLE, "        size: 0x%x", usbDeviceReq->size);
+	INFO_LOG(HLE, "        isControlRequest: 0x%x", usbDeviceReq->isControlRequest);
+	INFO_LOG(HLE, "        onComplete_func: 0x%x", usbDeviceReq->onComplete_func);
+	INFO_LOG(HLE, "        transmitted: 0x%x", usbDeviceReq->transmitted);
+	INFO_LOG(HLE, "        returnCode: 0x%x", usbDeviceReq->returnCode);
+	INFO_LOG(HLE, "        nextRequest: 0x%x", usbDeviceReq->nextRequest);
+	INFO_LOG(HLE, "        arg: 0x%x", usbDeviceReq->arg);
+	INFO_LOG(HLE, "        link: 0x%x", usbDeviceReq->link);
 
-	u8* dataPtr = Memory::GetPointerWriteRange(Usbd::getUsbDevReq()->data, 12);
-
-	if (step == 0) {
-		//char pk1[] = { 0x00, 0x00, 0x00, 0x03 };
-		char pk1[] = { 0x00, 0x02, 0x05, 0x01 };
-		memcpy(dataPtr, pk1, sizeof(pk1));
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x02;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x05;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x01;
-		step++;
-	} else if (step == 1) {
-		char pk2[] = { 
-			0x02, 0x00, 0x00, 0x00,
-			0x02, 0x00, 0x00, 0x00,
-			// Data size (LE) = 0x1000
-			0x00, 0x10, 0x00, 0x00
-		};
-		memcpy(dataPtr, pk2, sizeof(pk2));
-
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x02;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x02;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-
-		//// Data size (LE) = 0x1000
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x10;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		//Memory::GetPointer(Usbd::getUsbDevReq()->data)[ret++] = 0x00;
-		step++;
+	u8* dataPtr = Memory::GetPointerWriteRange(usbDeviceReq->data, usbDeviceReq->size);
+	if (!dataPtr) {
+		ERROR_LOG(HLE, "sceUsbbdReqRecv dataPtr null");
+		return 0;
 	}
-	for (int i = 0; i < Usbd::getUsbDevReq()->size; i++) {
-		INFO_LOG(HLE, "%02x ", Memory::GetPointer(Usbd::getUsbDevReq()->data)[i]);
+
+	if (gRecvLen > 0) {
+		memcpy(dataPtr, gRecvBuffer, gRecvLen);
+		usbDeviceReq->transmitted = gRecvLen;
+		send_to_ps3(gRecvBuffer, gRecvLen);
+		ret = 1;
 	}
-	if (Usbd::getUsbDevReq()->onComplete_func != NULL && ret > 0) {
-		u32 args[1] = { usbDeviceReqAddr };
-		hleEnqueueCall(Usbd::getUsbDevReq()->onComplete_func, 1, args);
+
+	char arr[1024];
+	int pos = sprintf(arr, "  >> sceUsbbdReqRecv: %d [", usbDeviceReq->size);
+	for (int i = 0; i < usbDeviceReq->size; i++) {
+		pos += sprintf(arr + pos, "%02x ", (unsigned char)dataPtr[i]);
+	}
+	pos += sprintf(arr + pos, "]");
+	ERROR_LOG(HLE, "pspcm_manager: %s", arr);
+
+	if (usbDeviceReq->onComplete_func != NULL && ret > 0) {
+		u32 args[] = { usbDeviceReqAddr , 0, 0 };
+		hleEnqueueCall(usbDeviceReq->onComplete_func, ARRAY_SIZE(args), args);
 	}
 	return 0;
 }
 
 static int sceUsbbdRegister(u32 usbDrvAddr) {
-	INFO_LOG(HLE, "sceUsbbdRegister");
-	auto usbDrv = PSPPointer<PspUsbDriver>::Create(usbDrvAddr);
+	INFO_LOG(HLE, "sceUsbbdRegister(drv=%08x)", usbDrvAddr);
+	auto& usbDrv = PSPPointer<PspUsbDriver>::Create(usbDrvAddr);
 	if (usbDrv.IsValid()) {
 		sceUsbConfig.pspUsbDriver = *usbDrv;
 		usbDrv.NotifyRead("sceUsbbdRegister");
 	}
-	INFO_LOG(HLE, "sceUsbbdRegister name : %s", Memory::GetPointer(Usbd::getUsbDriver()->name));
+	INFO_LOG(HLE, "sceUsbbdRegister name : %s", Memory::GetPointer(sceUsbConfig.pspUsbDriver.name));
+	INFO_LOG(HLE, "sceUsbbdRegister endpoints : %d", sceUsbConfig.pspUsbDriver.endpoints);
+	for (int i = 0; i < sceUsbConfig.pspUsbDriver.endpoints; i++) {
+		auto& ep = PSPPointer<UsbEndpoint>::Create(sceUsbConfig.pspUsbDriver.endp)[i];
+		INFO_LOG(HLE, "       endp[%d] : %02x %02x %02x", i, ep.endpointAddres, ep.unk1, ep.unk2);
+	}
 	INFO_LOG(HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
 	INFO_LOG(HLE, "sceUsbbdRegister intf_chang : %x", Usbd::getUsbDriver()->intf_chang_func);
 	INFO_LOG(HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
@@ -384,13 +558,24 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 	return 0;
 }
 
+static int sceUsbbdUnregister(u32 usbDrvAddr) {
+	INFO_LOG(HLE, "sceUsbbdUnregister(drv=%08x)", usbDrvAddr);
+	auto& usbDrv = PSPPointer<PspUsbDriver>::Create(usbDrvAddr);
+	if (usbDrv.IsValid()) {
+		memset(&sceUsbConfig.pspUsbDriver, 0, sizeof(PspUsbDriver));
+		usbDrv.NotifyRead("sceUsbbdUnregister");
+	}
+	return 0;
+}
+
+
 const HLEFunction sceUsbBus_driver[] =
 {
 	{0x23E51D8F, &WrapI_U<sceUsbbdReqSend>,          "sceUsbbdReqSend",                         'i', "x"  },
 	{0x913EC15D, &WrapI_U<sceUsbbdReqRecv>,          "sceUsbbdReqRecv",                         'i', "x"  },
 	{0x951A24CC, nullptr,                            "sceUsbbdClearFIFO",                       '?', ""   },
 	{0xB1644BE7, &WrapI_U<sceUsbbdRegister>,         "sceUsbbdRegister",                        'i', "x"  },
-	{0xC1E2A540, nullptr,                            "sceUsbbdUnregister",                      '?', ""   },
+	{0xC1E2A540, &WrapI_U<sceUsbbdUnregister>,       "sceUsbbdUnregister",                      'i', "x"  },
 	{0xC5E53685, nullptr,                            "sceUsbbdReqCancelAll",                    '?', ""   },
 	{0xCC57EC9D, nullptr,                            "sceUsbbdReqCancel",                       '?', ""   },
 	{0xE65441C1, nullptr,                            "sceUsbbdStall",                           '?', ""   },

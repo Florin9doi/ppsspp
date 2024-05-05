@@ -23,12 +23,16 @@ void __UsbInit();
 void __UsbDoState(PointerWrap &p);
 
 typedef struct {
-    u8 bmRequestType;
-	u8 bRequest;
-	u16 wValue;
-	u16 wIndex;
-	u16 wLength;
-} DeviceRequest;
+	u32 unk1;
+	u32 unk2;
+	u32 numInterfaces;
+} UsbInterface;
+
+typedef struct {
+	u32 endpointAddres;
+	u32 unk1;
+	u32 unk2;
+} UsbEndpoint;
 
 typedef struct {
 	u32 name;
@@ -50,6 +54,13 @@ typedef struct {
 	u32 link; // struct PspUsbDriver* link;
 } PspUsbDriver;
 
+typedef struct {
+	u8 bmRequestType;
+	u8 bRequest;
+	u16 wValue;
+	u16 wIndex;
+	u16 wLength;
+} DeviceRequest;
 
 typedef struct {
 	u32 endpointPtr;
@@ -59,17 +70,17 @@ typedef struct {
 	u32 onComplete_func;
 	u32 transmitted;
 	u32 returnCode;
-	u32 unk1;
-	u32 unk2;
-	u32 unk3;
+	u32 nextRequest;
+	u32 arg;
+	u32 link;
 } UsbdDeviceRequest;
 
 namespace Usbd {
 	typedef struct {
 		PspUsbDriver pspUsbDriver;
-		UsbdDeviceRequest usbDevReq;
+		//UsbdDeviceRequest usbDevReq;
 	} Config;
 
 	PspUsbDriver* getUsbDriver();
-	UsbdDeviceRequest* getUsbDevReq();
+	//UsbdDeviceRequest* getUsbDevReq();
 }
