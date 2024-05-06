@@ -2010,14 +2010,19 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 	{
 		switch (cmd) {
 		case 0x03415001: // register USB thread
-			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {  // NOTE: not outPtr
+			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
 				u32 threadID = Memory::Read_U32(argAddr);
 				ERROR_LOG(SCEIO, "sceIoDevctl : usbpspcm : register USB : threadID = 0x%08x/%d", threadID, threadID);
-				sceKernelStartThread(threadID, 0, 0);
 				return 0;
 			}
 			break;
 		case 0x03415002: // unregister USB thread
+			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
+				u32 threadID = Memory::Read_U32(argAddr);
+				ERROR_LOG(SCEIO, "sceIoDevctl : usbpspcm : unregister USB : threadID = 0x%08x/%d", threadID, threadID);
+				return 0;
+			}
+			break;
 		case 0x03435005: // Bind
 		default:
 			ERROR_LOG(SCEIO, "UNIMPL sceIoDevctl(\"%s\", %08x, %08x, %i, %08x, %i)", name, cmd, argAddr, argLen, outPtr, outLen);
