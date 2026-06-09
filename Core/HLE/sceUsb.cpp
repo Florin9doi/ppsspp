@@ -23,6 +23,7 @@
 #include "Core/HLE/FunctionWrappers.h"
 #include "Core/HLE/KernelWaitHelpers.h"
 #include "Core/HLE/sceKernelMemory.h"
+#include "Core/HLE/sceKernelModule.h"
 #include "Core/HLE/sceKernelThread.h"
 #include "Core/HLE/sceUsb.h"
 #include "Core/MemMapHelpers.h"
@@ -451,6 +452,12 @@ static int sceUsbActivate(u32 pid) {
 		psLinkRunning = true;
 		psLinkThread = std::thread(&PSLinkThread);
 	}
+	if (pid == 0x039e) { // T-DMB tunner
+		int modId = sceKernelLoadModule("flash0:/kd/usbdmb.prx", 0, 0);
+		INFO_LOG(Log::sceUtility, "sceKernelLoadModule flash0:/kd/usbdmb.prx : modid=%d", modId);
+		int ret = __KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
+		INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbdmb.prx = %d", ret);
+	}
 
 	UsbUpdateState();
 
@@ -683,6 +690,91 @@ const HLEFunction sceUsbBus_driver[] =
 	{0xE65441C1, nullptr,                            "sceUsbbdStall",                           '?', ""   },
 };
 
+const HLEFunction sceUsb1Seg[] =
+{
+	{}
+};
+
+static u32 sceUsbDmbConstruct(u32 arg1, u32 freq, u32 arg3) {
+	INFO_LOG(Log::HLE, "sceUsbDmbConstruct(%d, %d, %d)", arg1, freq, arg3);
+	return 0;
+}
+typedef struct {
+	u32 nextPtr;
+	u32 val1;
+	u32 val2;
+	u32 val3;
+	u32 val4;
+	u32 val5;
+} DMBResult;
+static u32 sceUsbDmbConstructResult(u32 arg1, u32 arg2, u32 arg3) {
+	INFO_LOG(Log::HLE, "sceUsbDmbConstructResult(%x, %x, %x)", arg1, arg2, arg3);
+	auto dmbResult = PSPPointer<DMBResult>::Create(arg1);
+	if (dmbResult.IsValid()) {
+		dmbResult->val1 = 0x1234;
+		dmbResult->val2 = 0x3456;
+		dmbResult->val3 = 0x5678;
+		dmbResult->val4 = 0x7891;
+		dmbResult->val5 = 0x9abc;
+		dmbResult.NotifyWrite("DmbConstructResult");
+	}
+	return 0;
+}
+static u32 sceUsbDmbDestruct() {
+	INFO_LOG(Log::HLE, "sceUsbDmbDestruct");
+	return 0;
+}
+
+typedef struct {
+	u8 major;
+	u8 minor;
+} DMBVersion;
+static u32 sceUsbDmbGetVersion(u32 argptr) {
+	INFO_LOG(Log::HLE, "sceUsbDmbGetVersion(%d)", argptr);
+	auto dmbVersion = PSPPointer<DMBVersion>::Create(argptr);
+	if (dmbVersion.IsValid()) {
+		dmbVersion->major = 0x01;
+		dmbVersion->minor = 0x02;
+		dmbVersion.NotifyWrite("DmbGetVersion");
+	}
+	return 0;
+}
+
+const HLEFunction sceUsbDmb[] =
+{
+	/*
+	{0x247da6b0, &WrapU_UUU<sceUsbDmbConstruct>,     "sceUsbDmbConstruct",                   'x', "xxx" },
+	{0x48fc3564, &WrapU_V<sceUsbDmbDestruct>,        "sceUsbDmbDestruct",                    'x', "" },
+	{0x5e5e8e1f, &WrapU_U<sceUsbDmbGetVersion>,      "sceUsbDmbGetVersion",                  'x', "x" },
+	{0x62ebf14a, nullptr,                            "sceUsbDmb4",                           '?', "" },
+	{0x9e658527, nullptr,                            "sceUsbDmb5",                           '?', "" },
+	{0xd40f38fc, &WrapU_UUU<sceUsbDmbConstructResult>, "sceUsbDmbConstructResult",             'x', "xxx" },
+	{0x04BE645D, nullptr,                            "sceUsbDmb8",                           '?', "" },
+	{0x1127DF8E, nullptr,                            "sceUsbDmb9",                           '?', "" },
+	{0x1806F585, nullptr,                            "sceUsbDmb10",                          '?', "" },
+	{0x19B8E864, nullptr,                            "sceUsbDmb11",                          '?', "" },
+	{0x3F8DBB02, nullptr,                            "sceUsbDmb12",                          '?', "" },
+	{0x49C720C7, nullptr,                            "sceUsbDmb13",                          '?', "" },
+	{0x4FA5500C, nullptr,                            "sceUsbDmb14",                          '?', "" },
+	{0x5D17EDA7, nullptr,                            "sceUsbDmb15",                          '?', "" },
+	{0x74151936, nullptr,                            "sceUsbDmb16",                          '?', "" },
+	{0x7AC04917, nullptr,                            "sceUsbDmb17",                          '?', "" },
+	{0x89A28C61, nullptr,                            "sceUsbDmb18",                          '?', "" },
+	{0x9858B28F, nullptr,                            "sceUsbDmb19",                          '?', "" },
+	{0x9E84294B, nullptr,                            "sceUsbDmb20",                          '?', "" },
+	{0xA0B31495, nullptr,                            "sceUsbDmb21",                          '?', "" },
+	{0xA3A3E9A5, nullptr,                            "sceUsbDmb22",                          '?', "" },
+	{0xA578EA4F, nullptr,                            "sceUsbDmb23",                          '?', "" },
+	{0xA7D6F145, nullptr,                            "sceUsbDmb24",                          '?', "" },
+	{0xB354DB59, nullptr,                            "sceUsbDmb25",                          '?', "" },
+	{0xD1345A20, nullptr,                            "sceUsbDmb26",                          '?', "" },
+	{0xD3DBD48B, nullptr,                            "sceUsbDmb27",                          '?', "" },
+	{0xF5E1D17A, nullptr,                            "sceUsbDmb28",                          '?', "" },
+	/*/
+	{}
+	//*/
+};
+
 void Register_sceUsb()
 {
 	RegisterHLEModule("sceUsbstor", ARRAY_SIZE(sceUsbstor), sceUsbstor);
@@ -690,4 +782,6 @@ void Register_sceUsb()
 	RegisterHLEModule("sceUsb", ARRAY_SIZE(sceUsb), sceUsb);
 	RegisterHLEModule("sceUsb_driver", ARRAY_SIZE(sceUsb), sceUsb);
 	RegisterHLEModule("sceUsbBus_driver", ARRAY_SIZE(sceUsbBus_driver), sceUsbBus_driver);
+	RegisterHLEModule("sceUsb1Seg", ARRAY_SIZE(sceUsb1Seg), sceUsb1Seg);
+	RegisterHLEModule("sceUsbDmb", ARRAY_SIZE(sceUsbDmb), sceUsbDmb);
 }

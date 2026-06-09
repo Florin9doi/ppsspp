@@ -626,6 +626,7 @@ static u32 sceUtilityUnloadAvModule(u32 module) {
 }
 
 static u32 sceUtilityLoadModule(u32 module) {
+	ERROR_LOG(Log::sceUtility, "sceUtilityLoadModule(0x%x)", module);
 	int result = LoadModuleInternal(module, false);
 	// TODO: Each module has its own timing, technically, but this is a low-end.
 	if (module == 0x3FF) {
@@ -1444,11 +1445,24 @@ static u32 sceUtilityLoadUsbModule(u32 module)
 		ERROR_LOG(Log::sceUtility, "sceUtilityLoadUsbModule(%i): invalid module id", module);
 	}
 
+	ERROR_LOG(Log::sceUtility, "sceUtilityLoadUsbModule(0x%x)", module);
 	if (module == PSP_USB_MODULE_PSPCM) {
 		int modId = sceKernelLoadModule("flash0:/kd/usbpspcm.prx", 0, 0);
 		INFO_LOG(Log::sceUtility, "sceKernelLoadModule flash0:/kd/usbpspcm.prx : modid=%d", modId);
 		int ret = __KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
 		INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbpspcm.prx = %d", ret);
+	}
+	//if (module == PSP_USB_MODULE_ACC) {
+	//	int modId = sceKernelLoadModule("flash0:/kd/usbacc.prx", 0, 0);
+	//	INFO_LOG(Log::sceUtility, "sceKernelLoadModule flash0:/kd/usbacc.prx : modid=%d", modId);
+	//	int ret = __KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
+	//	INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbacc.prx = %d", ret);
+	//}
+	if (module == PSP_USB_MODULE_GPS) {
+		int modId = sceKernelLoadModule("flash0:/kd/usbgps.prx", 0, 0);
+		INFO_LOG(Log::sceUtility, "sceKernelLoadModule flash0:/kd/usbgps.prx : modid=%d", modId);
+		int ret = __KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
+		INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbgps.prx = %d", ret);
 	}
 
 	return hleNoLog(0);

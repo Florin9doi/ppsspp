@@ -2637,6 +2637,7 @@ const HLEFunction ModuleMgrForUser[] = {
 	{0XF2D8D1B4, &WrapU_CUU<sceKernelLoadModuleNpDrm>,                  "sceKernelLoadModuleNpDrm",                'x', "sxx"    },
 	{0XE4C4211C, nullptr,                                               "ModuleMgrForUser_E4C4211C",               '?', ""       },
 	{0XFBE27467, nullptr,                                               "ModuleMgrForUser_FBE27467",               '?', ""       },
+	{0x1196472e, &WrapI_UUUU<sceKernelLoadModuleBufferUsbWlan>,         "sceKernelLoadModuleBufferMs",             'i', "xxxx"   },
 };
 
 const HLEFunction ModuleMgrForKernel[] = {

@@ -928,6 +928,13 @@ const HLEFunction ThreadManForUser[] =
 
 const HLEFunction ThreadManForKernel[] =
 {
+	{0X328C546A, &WrapI_IUUUU<sceKernelWaitEventFlagCB>,             "sceKernelWaitEventFlagCB",                  'i', "ixxpp",  HLE_NOT_IN_INTERRUPT },
+	{0XB011B11F, &WrapI_IIU<sceKernelLockMutex>,                     "sceKernelLockMutex",                        'i', "iix",    HLE_NOT_IN_INTERRUPT | HLE_NOT_DISPATCH_SUSPENDED },
+	{0X6B30100F, &WrapI_II<sceKernelUnlockMutex>,                    "sceKernelUnlockMutex",                      'i', "ii"      },
+	{0XB7D098C6, &WrapI_CUIU<sceKernelCreateMutex>,                  "sceKernelCreateMutex",                      'i', "sxip"    },
+	{0XC11BA8C4, &WrapI_II<sceKernelNotifyCallback>,                 "sceKernelNotifyCallback",                   'i', "ii"      },
+	{0XF8170FBE, &WrapI_I<sceKernelDeleteMutex>,                     "sceKernelDeleteMutex",                      'i', "i"       },
+
 	{0xCEADEB47, &WrapI_U<sceKernelDelayThread>,                     "sceKernelDelayThread",                      'i', "x",      HLE_NOT_IN_INTERRUPT | HLE_NOT_DISPATCH_SUSPENDED | HLE_KERNEL_SYSCALL },
 	{0x446D8DE6, &WrapI_CUUIUU<sceKernelCreateThread>,               "sceKernelCreateThread",                     'i', "sxxixx", HLE_NOT_IN_INTERRUPT | HLE_KERNEL_SYSCALL },
 	{0xF475845D, &WrapI_IIU<sceKernelStartThread>,                   "sceKernelStartThread",                      'i', "iix",    HLE_NOT_IN_INTERRUPT | HLE_KERNEL_SYSCALL },

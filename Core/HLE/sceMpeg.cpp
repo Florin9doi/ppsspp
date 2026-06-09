@@ -1319,7 +1319,7 @@ static u32 sceMpegAvcDecodeFlush(u32 mpeg) {
 static int sceMpegInitAu(u32 mpeg, u32 bufferAddr, u32 auPointer) {
 	MpegContext *ctx = getMpegCtx(mpeg);
 	if (!ctx) {
-		return hleLogWarning(Log::Mpeg, -1, "bad mpeg handle");
+		return 0;//hleLogWarning(Log::Mpeg, -1, "bad mpeg handle");
 	}
 
 	SceMpegAu sceAu;
@@ -1935,7 +1935,7 @@ static u32 sceMpegAvcInitYCbCr(u32 mpeg, int mode, int width, int height, u32 yc
 
 	MpegContext *ctx = getMpegCtx(mpeg);
 	if (!ctx) {
-		return hleLogWarning(Log::Mpeg, -1, "bad mpeg handle");
+		return 0;//hleLogWarning(Log::Mpeg, -1, "bad mpeg handle");
 	}
 
 	WARN_LOG_ONCE(sceMpegAvcInitYCbCr, Log::Mpeg, "UNIMPL sceMpegAvcInitYCbCr(%08x, %i, %i, %i, %08x)", mpeg, mode, width, height, ycbcr_addr);
@@ -2201,6 +2201,15 @@ static u32 sceMpegFlushAu(u32 mpeg)
 	return 0;
 }
 
+static u32 dmbVideoDecoder_Init(u32 arg1, u32 arg2, u32 arg3) {
+	WARN_LOG(Log::ME, "dmbVideoDecoder_Init(%x, %x, %x)", arg1, arg2, arg3);
+	return 0x10000;
+}
+static u32 dmbVideoDecoder_Init2(u32 arg1, u32 arg2, u32 arg3) {
+	WARN_LOG(Log::ME, "dmbVideoDecoder_Init2(%x, %x, %x)", arg1, arg2, arg3);
+	return 0;
+}
+
 const HLEFunction sceMpeg[] =
 {
 	{0XE1CE83A7, &WrapI_UUUU<sceMpegGetAtracAu>,               "sceMpegGetAtracAu",                  'i', "xxxx"   },
@@ -2262,6 +2271,8 @@ const HLEFunction sceMpeg[] =
 	{0XC345DED2, nullptr,                                      "sceMpeg_C345DED2",                   '?', ""       },
 	{0XB27711A8, nullptr,                                      "sceMpeg_B27711A8",                   '?', ""       },
 	{0X988E9E12, nullptr,                                      "sceMpeg_988E9E12",                   '?', ""       },
+	{0x42c679f6, &WrapU_UUU<dmbVideoDecoder_Init>,             "sceMpeg_42c679f6",                   'x', "xxx"       },
+	{0x75e21135, &WrapU_UUU<dmbVideoDecoder_Init2>,            "sceMpeg_75e21135",                   'x', "xxx"       },
 };
 
 void Register_sceMpeg()

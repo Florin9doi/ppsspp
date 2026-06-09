@@ -110,6 +110,7 @@ static int sceUsbGpsGetData(u32 gpsDataAddr, u32 satDataAddr) {
 
 const HLEFunction sceUsbGps[] =
 {
+	/*
 	{0X268F95CA, nullptr,                                 "sceUsbGpsSetInitDataLocation",  '?', "" },
 	{0X31F95CDE, nullptr,                                 "sceUsbGpsGetPowerSaveMode",     '?', "" },
 	{0X54D26AA4, &WrapI_U<sceUsbGpsGetInitDataLocation>,  "sceUsbGpsGetInitDataLocation",  'i', "x" },
@@ -123,6 +124,9 @@ const HLEFunction sceUsbGps[] =
 	{0X9F267D34, &WrapI_V<sceUsbGpsOpen>,                 "sceUsbGpsOpen",                 'i', "" },
 	{0XA259CD67, nullptr,                                 "sceUsbGpsReset",                '?', "" },
 	{0XA8ED0BC2, nullptr,                                 "sceUsbGpsSetStaticNavMode",     '?', "" },
+	/*/
+	{}
+	//*/
 };
 
 void Register_sceUsbGps()
