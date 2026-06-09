@@ -3948,6 +3948,7 @@ const HLEFunction ModuleMgrForUser[] = {
 	{0XE4C4211C, nullptr,                                               "sceKernelLoadModuleWithBlockOffset",      '?', ""       },
 	{0XFBE27467, nullptr,                                               "sceKernelLoadModuleByIDWithBlockOffset",  '?', ""       },
 	{0XD2FBC957, &WrapU_UU<sceKernelGetModuleGPByAddress>,              "sceKernelGetModuleGPByAddress",          'x', "xx"     },
+	{0x1196472e, &WrapI_UUUU<sceKernelLoadModuleBufferUsbWlan>,         "sceKernelLoadModuleBufferMs",             'i', "xxxx"   },
 };
 
 const HLEFunction ModuleMgrForKernel[] = {
