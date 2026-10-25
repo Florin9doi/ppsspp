@@ -1770,10 +1770,13 @@ static u32 sceUtilityLoadUsbModule(u32 module) {
 
 	ERROR_LOG(Log::sceUtility, "sceUtilityLoadUsbModule(0x%x)", module);
 	if (module == PSP_USB_MODULE_PSPCM) {
-		int modId = sceKernelLoadModule(currentMIPS, "flash0:/kd/usbpspcm.prx", 0, 0);
-		INFO_LOG(Log::sceUtility, "sceKernelLoadModule flash0:/kd/usbpspcm.prx : modid=%d", modId);
-		int ret = __KernelStartModule(modId, 0, 0, 0, nullptr, nullptr);
-		INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbpspcm.prx = %d", ret);
+		std::string error_string;
+		SceUID moduleId = KernelLoadModule("flash0:/kd/usbpspcm.prx", &error_string);
+		INFO_LOG(Log::sceUtility, "KernelLoadModule flash0:/kd/usbpspcm.prx : moduleId=%d", moduleId);
+		if (moduleId >= 0) {
+			int ret = sceKernelStartModule(moduleId, 0, 0, 0, 0);
+			INFO_LOG(Log::sceUtility, "sceKernelStartModule flash0:/kd/usbpspcm.prx = %d", ret);
+		}
 	}
 	//if (module == PSP_USB_MODULE_ACC) {
 	//	int modId = sceKernelLoadModule(currentMIPS, "flash0:/kd/usbacc.prx", 0, 0);
