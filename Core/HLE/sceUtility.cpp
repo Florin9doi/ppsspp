@@ -1763,7 +1763,7 @@ static int sceUtilityHtmlViewerGetStatus() {
 	return hleLogVerbose(Log::sceUtility, htmlViewerDialog->GetStatus());
 }
 
-static u32 sceUtilityLoadUsbModule(u32 module) {
+u32 sceUtilityLoadUsbModule(u32 module) {
 	if (module < 1 || module > 5) {
 		return hleLogError(Log::sceUtility, 0, "invalid module id");
 	}

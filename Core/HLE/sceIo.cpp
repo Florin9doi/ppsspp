@@ -2151,6 +2151,7 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
 				u32 threadID = Memory::ReadOrException_U32(argAddr);
 				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : register USB : threadID = 0x%08x/%d", threadID, threadID);
+				sceKernelStartThread(threadID, 0, 0);
 				return 0;
 			}
 			break;
@@ -2630,16 +2631,16 @@ IoDrv gIoDrv;
 
 static int sceIoAddDrv(u32 drvAddr) {
 	ERROR_LOG(Log::sceIo, "sceIoAddDrv");
-	auto& ioDrv = PSPPointer<IoDrv>::Create(drvAddr);
+	auto ioDrv = PSPPointer<IoDrv>::Create(drvAddr);
 	if (ioDrv.IsValid()) {
 		ioDrv.NotifyRead("sceIoAddDrv");
 		gIoDrv = *ioDrv;
 	}
-	ERROR_LOG(Log::sceIo, "    name = %s", Memory::GetPointerOrException(gIoDrv.name));
-	ERROR_LOG(Log::sceIo, "    dev_type = %s", gIoDrv.dev_type);
-	ERROR_LOG(Log::sceIo, "    unk2 = %s", gIoDrv.unk2);
-	ERROR_LOG(Log::sceIo, "    name = %s", Memory::GetPointerOrException(gIoDrv.name));
-	ERROR_LOG(Log::sceIo, "    funcs = %s", gIoDrv.funcs);
+	ERROR_LOG(Log::sceIo, "    name = %s", Memory::GetCharPointer(gIoDrv.name));
+	ERROR_LOG(Log::sceIo, "    dev_type = %08x", gIoDrv.dev_type);
+	ERROR_LOG(Log::sceIo, "    unk2 = %08x", gIoDrv.unk2);
+	ERROR_LOG(Log::sceIo, "    description = %s", Memory::GetCharPointer(gIoDrv.description));
+	ERROR_LOG(Log::sceIo, "    funcs = %08x", gIoDrv.funcs);
 	return 0;
 }
 
