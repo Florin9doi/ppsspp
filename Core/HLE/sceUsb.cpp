@@ -636,7 +636,7 @@ static void UsbLinkSendAck() {
 }
 
 // The standard requests are answered by the usbd stack, not by the driver: the descriptors come from
-// the tables the driver registered. The host asks for them when the connection is made.
+// the tables the driver registered, if it registered some. The host asks for them when the connection is made.
 //
 // Layout of what a driver registers (the PSPSDK structs, little endian, pointers are guest addresses):
 //   device descriptor: the 18 bytes of the USB descriptor.
@@ -727,6 +727,39 @@ static bool UsbBuildConfigDescriptor(u32 addr, std::vector<u8> &out) {
 	return true;
 }
 
+// usbpspcm.prx registers no descriptor tables (devp and confp are 0, only the interface string is
+// there): the bus describes the device it was activated for. These are the descriptors of the
+// product id 0x01cb, "PSP Type D" by Sony, with 3 endpoints: bulk IN 1, bulk OUT 2, interrupt IN 3.
+static const u8 usbPspcmDevice[] = {
+	18, 1, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0x4c, 0x05, 0xcb, 0x01, 0x00, 0x01, 1, 2, 0, 1,
+};
+static const u8 usbPspcmConfig[] = {
+	9, 2, 0x27, 0x00, 1, 1, 0, 0xc0, 0x01,                      // configuration
+	9, 4, 0, 0, 3, 0xff, 0x01, 0xff, 3,                         // interface, string 3 is the driver's
+	7, 5, 0x81, 0x02, 0x40, 0x00, 0x00,                         // bulk IN
+	7, 5, 0x02, 0x02, 0x40, 0x00, 0x00,                         // bulk OUT
+	7, 5, 0x83, 0x03, 0x08, 0x00, 0x08,                         // interrupt IN
+};
+
+// What the driver registered, or what the bus knows when it registered nothing.
+static bool UsbGetDeviceDescriptor(const PspUsbDriver *drv, std::vector<u8> &out) {
+	const u32 addr = drv->devp_hi ? drv->devp_hi : drv->devp;
+	if (addr != 0 && UsbBuildDeviceDescriptor(addr, out)) {
+		return true;
+	}
+	out.assign(usbPspcmDevice, usbPspcmDevice + sizeof(usbPspcmDevice));
+	return true;
+}
+
+static bool UsbGetConfigDescriptor(const PspUsbDriver *drv, std::vector<u8> &out) {
+	const u32 addr = drv->confp_hi ? drv->confp_hi : drv->confp;
+	if (addr != 0 && UsbBuildConfigDescriptor(addr, out)) {
+		return true;
+	}
+	out.assign(usbPspcmConfig, usbPspcmConfig + sizeof(usbPspcmConfig));
+	return true;
+}
+
 // Strings: 0 is the list of languages, the default string of the driver is the one of its interface.
 // The manufacturer and product strings aren't in the driver, the bus gives them.
 static bool UsbBuildStringDescriptor(const PspUsbDriver *drv, u32 index, std::vector<u8> &out) {
@@ -737,7 +770,7 @@ static bool UsbBuildStringDescriptor(const PspUsbDriver *drv, u32 index, std::ve
 
 	std::vector<u8> cfg;
 	u8 ifaceString = 0;
-	if (UsbBuildConfigDescriptor(drv->confp_hi ? drv->confp_hi : drv->confp, cfg)) {
+	if (UsbGetConfigDescriptor(drv, cfg)) {
 		for (size_t pos = 9; pos + 9 <= cfg.size() && cfg[pos] >= 2; pos += cfg[pos]) {
 			if (cfg[pos + 1] == 4) {
 				ifaceString = cfg[pos + 8];
@@ -787,10 +820,10 @@ static void UsbLinkHandleStandardRequest(const PspUsbDriver *drv, const std::vec
 		bool ok = false;
 		switch (type) {
 		case 1:
-			ok = UsbBuildDeviceDescriptor(drv->devp_hi ? drv->devp_hi : drv->devp, desc);
+			ok = UsbGetDeviceDescriptor(drv, desc);
 			break;
 		case 2:
-			ok = UsbBuildConfigDescriptor(drv->confp_hi ? drv->confp_hi : drv->confp, desc);
+			ok = UsbGetConfigDescriptor(drv, desc);
 			break;
 		case 3:
 			ok = UsbBuildStringDescriptor(drv, index, desc);
