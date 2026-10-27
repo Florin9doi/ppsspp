@@ -94,6 +94,7 @@ enum class UsbLinkMsgType {
 	DISCONNECTED,
 	CONTROL,  // data: the whole packet.
 	BULK,     // data: the payload.
+	IN_REQUEST, // the host wants data from an IN endpoint (0x81, 0x83), no payload.
 };
 
 struct UsbLinkMsg {
@@ -114,6 +115,11 @@ static u32 usbControlReqAddr = 0;
 // Bulk data from the host that no sceUsbbdReqRecv has asked for yet, and the requests waiting for data.
 static std::deque<std::vector<u8>> usbRxQueue[USB_LINK_MAX_ENDPOINTS];
 static std::deque<u32> usbPendingRecv[USB_LINK_MAX_ENDPOINTS];
+// Device to host: sceUsbbdReqSend requests wait here until the host asks for data on that endpoint,
+// like on a real bus. The host asks once per endpoint and waits for the answer, usbHostWaiting
+// collapses the repeated asks.
+static std::deque<u32> usbPendingSend[USB_LINK_MAX_ENDPOINTS];
+static bool usbHostWaiting[USB_LINK_MAX_ENDPOINTS];
 
 enum UsbStatus {
 	USB_STATUS_STOPPED      = 0x001,
@@ -355,8 +361,8 @@ static void send_to_ps3(const char *buf, int len) {
 	// TODO: HACK: transfer the bulk IN req from host to psp and start this thread based on that:
 	//if (buf[4] == 0x41 && buf[5] == 0x02) {
 	//if (len == 4) {
-	//	sceKernelStartThread(0x184, 0, 0);
 	//	ERROR_LOG(Log::HLE, "pspcm_manager: sceKernelStartThread(0x184)");
+	//	sceKernelStartThread(0x184, 0, 0);
 	//}
 }
 
@@ -506,7 +512,9 @@ static int PSLinkThread() {
 
 				UsbLinkMsg msg;
 				msg.endpoint = pk.endpoint;
-				if (pk.endpoint == 0) {
+				if (pk.endpoint & 0x80) {
+					msg.type = UsbLinkMsgType::IN_REQUEST;
+				} else if (pk.endpoint == 0) {
 					msg.type = UsbLinkMsgType::CONTROL;
 					msg.data.assign(pk.net_data, pk.net_data + pklen);
 				} else {
@@ -538,6 +546,8 @@ static void UsbLinkResetEndpoints() {
 	for (int i = 0; i < USB_LINK_MAX_ENDPOINTS; ++i) {
 		usbRxQueue[i].clear();
 		usbPendingRecv[i].clear();
+		usbPendingSend[i].clear();
+		usbHostWaiting[i] = false;
 	}
 }
 
@@ -567,6 +577,243 @@ static bool UsbFillRecv(u32 reqAddr, int endpoint) {
 	req->transmitted = size;
 	req.NotifyWrite("sceUsbbdReqRecv");
 	return true;
+}
+
+// Sends the data of the oldest waiting sceUsbbdReqSend if the host asked for this endpoint.
+// inHle: called from an HLE function, where the completion is queued instead of called directly.
+static void UsbLinkServeIn(int endpoint, bool inHle) {
+	if (!usbHostWaiting[endpoint] || usbPendingSend[endpoint].empty()) {
+		return;
+	}
+	const u32 reqAddr = usbPendingSend[endpoint].front();
+	usbPendingSend[endpoint].pop_front();
+	auto req = PSPPointer<UsbdDeviceRequest>::Create(reqAddr);
+	if (!req.IsValid()) {
+		return;
+	}
+	usbHostWaiting[endpoint] = false;
+
+	const u32 size = req->size;
+	static const u8 noData = 0;
+	const bool validData = size > 0 && Memory::IsValidRange(req->data, size);
+	const u8 *data = validData ? Memory::GetPointerUnchecked(req->data) : &noData;
+	// The USB address the host knows: the endpoint number plus the direction.
+	UsbLinkSendToHost(endpoint | 0x80, data, validData ? size : 0);
+
+	req->transmitted = validData ? size : 0;
+	req->returnCode = (size > 0 && !validData) ? SCE_KERNEL_ERROR_ILLEGAL_ADDR : 0;
+	req.NotifyWrite("sceUsbbdReqSend");
+
+	if (req->onComplete_func != 0) {
+		if (inHle) {
+			u32 args[] = { reqAddr, 0, 0 };
+			hleEnqueueCall(req->onComplete_func, ARRAY_SIZE(args), args);
+		} else {
+			UsbLinkCallDriver(req->onComplete_func, reqAddr, 0, 0);
+		}
+	}
+}
+
+// Reply to a control request: its header, with the length of the data it carries. The host's wLength
+// is only the most it takes. At most 0x40 bytes of data fit a packet of the protocol.
+static void UsbLinkSendControlReply(const u8 *data, u32 size) {
+	const u32 replySize = std::min<u32>(size, 0x40);
+	char reply[12 + 0x40];
+	memcpy(reply, gRecvBuffer, 12);
+	if (replySize > 0) {
+		memcpy(reply + 12, data, replySize);
+	}
+	reply[2] = (char)(12 + replySize);
+	reply[10] = (char)(replySize & 0xff);
+	reply[11] = (char)(replySize >> 8);
+	send_to_ps3(reply, 12 + replySize);
+}
+
+// Acknowledges a host to device control request, with or without data: the header only.
+static void UsbLinkSendAck() {
+	const char ack[] = { (char)0xf0, 0x0f, 0x04, 0x00 };
+	send_to_ps3(ack, sizeof(ack));
+}
+
+// The standard requests are answered by the usbd stack, not by the driver: the descriptors come from
+// the tables the driver registered. The host asks for them when the connection is made.
+//
+// Layout of what a driver registers (the PSPSDK structs, little endian, pointers are guest addresses):
+//   device descriptor: the 18 bytes of the USB descriptor.
+//   config: 9 bytes of the USB descriptor, padding, u32 settings -> array of { u32 interfaces, u32 count }.
+//   interface: 9 bytes of the USB descriptor, padding, u32 endpoints, u32 extra, u32 extraLength (24 bytes).
+//   endpoint: 7 bytes of the USB descriptor, padding, u32 extra, u32 extraLength (16 bytes).
+static const u32 USB_CONFIG_SETTINGS_OFFSET = 12;
+static const u32 USB_INTERFACE_STRIDE = 24;
+static const u32 USB_ENDPOINT_STRIDE = 16;
+static const u32 USB_MAX_EXTRA = 0x40;
+
+static bool UsbReadGuest(u32 addr, void *out, u32 size) {
+	if (addr == 0 || !Memory::IsValidRange(addr, size)) {
+		return false;
+	}
+	Memory::Memcpy(out, addr, size, "UsbDescriptor");
+	return true;
+}
+
+static void UsbAppendExtra(std::vector<u8> &out, u32 extraAddr, u32 extraLen) {
+	if (extraAddr == 0 || extraLen == 0 || extraLen > USB_MAX_EXTRA) {
+		return;
+	}
+	std::vector<u8> extra(extraLen);
+	if (UsbReadGuest(extraAddr, extra.data(), extraLen)) {
+		out.insert(out.end(), extra.begin(), extra.end());
+	}
+}
+
+static bool UsbBuildDeviceDescriptor(u32 addr, std::vector<u8> &out) {
+	u8 desc[18];
+	if (!UsbReadGuest(addr, desc, sizeof(desc)) || desc[0] != 18 || desc[1] != 1) {
+		return false;
+	}
+	out.assign(desc, desc + sizeof(desc));
+	return true;
+}
+
+// Flattens the config, its interfaces and endpoints into the bytes a host reads.
+static bool UsbBuildConfigDescriptor(u32 addr, std::vector<u8> &out) {
+	u8 cfg[9];
+	if (!UsbReadGuest(addr, cfg, sizeof(cfg)) || cfg[0] != 9 || cfg[1] != 2) {
+		return false;
+	}
+	const u32 numInterfaces = cfg[4];
+	u32 settings = 0;
+	UsbReadGuest(addr + USB_CONFIG_SETTINGS_OFFSET, &settings, 4);
+	if (numInterfaces == 0 || numInterfaces > 8 || settings == 0) {
+		return false;
+	}
+
+	out.assign(cfg, cfg + sizeof(cfg));
+	for (u32 i = 0; i < numInterfaces; ++i) {
+		u32 ifaces = 0, count = 0;
+		if (!UsbReadGuest(settings + i * 8, &ifaces, 4) || !UsbReadGuest(settings + i * 8 + 4, &count, 4) || count == 0 || count > 8) {
+			return false;
+		}
+		for (u32 j = 0; j < count; ++j) {
+			const u32 ifaceAddr = ifaces + j * USB_INTERFACE_STRIDE;
+			u8 iface[9];
+			u32 endpoints = 0, extra = 0, extraLen = 0;
+			if (!UsbReadGuest(ifaceAddr, iface, sizeof(iface)) || iface[0] != 9 || iface[1] != 4 || iface[4] > 16) {
+				return false;
+			}
+			UsbReadGuest(ifaceAddr + 12, &endpoints, 4);
+			UsbReadGuest(ifaceAddr + 16, &extra, 4);
+			UsbReadGuest(ifaceAddr + 20, &extraLen, 4);
+			out.insert(out.end(), iface, iface + sizeof(iface));
+			UsbAppendExtra(out, extra, extraLen);
+
+			for (u32 k = 0; k < iface[4]; ++k) {
+				const u32 epAddr = endpoints + k * USB_ENDPOINT_STRIDE;
+				u8 ep[7];
+				u32 epExtra = 0, epExtraLen = 0;
+				if (!UsbReadGuest(epAddr, ep, sizeof(ep)) || ep[0] != 7 || ep[1] != 5) {
+					return false;
+				}
+				UsbReadGuest(epAddr + 8, &epExtra, 4);
+				UsbReadGuest(epAddr + 12, &epExtraLen, 4);
+				out.insert(out.end(), ep, ep + sizeof(ep));
+				UsbAppendExtra(out, epExtra, epExtraLen);
+			}
+		}
+	}
+	// The total length covers what was flattened.
+	out[2] = (u8)(out.size() & 0xff);
+	out[3] = (u8)(out.size() >> 8);
+	return true;
+}
+
+// Strings: 0 is the list of languages, the default string of the driver is the one of its interface.
+// The manufacturer and product strings aren't in the driver, the bus gives them.
+static bool UsbBuildStringDescriptor(const PspUsbDriver *drv, u32 index, std::vector<u8> &out) {
+	if (index == 0) {
+		out = { 4, 3, 0x09, 0x04 }; // English (United States)
+		return true;
+	}
+
+	std::vector<u8> cfg;
+	u8 ifaceString = 0;
+	if (UsbBuildConfigDescriptor(drv->confp_hi ? drv->confp_hi : drv->confp, cfg)) {
+		for (size_t pos = 9; pos + 9 <= cfg.size() && cfg[pos] >= 2; pos += cfg[pos]) {
+			if (cfg[pos + 1] == 4) {
+				ifaceString = cfg[pos + 8];
+				break;
+			}
+		}
+	}
+
+	if (index == ifaceString && drv->str != 0) {
+		u8 head[2];
+		if (UsbReadGuest(drv->str, head, sizeof(head)) && head[1] == 3 && head[0] >= 2 && head[0] <= 0x40) {
+			out.resize(head[0]);
+			return UsbReadGuest(drv->str, out.data(), head[0]);
+		}
+		return false;
+	}
+
+	const char *text = nullptr;
+	if (index == 1) {
+		text = "Sony";
+	} else if (index == 2) {
+		text = "PSP Type D";
+	}
+	if (!text) {
+		return false;
+	}
+	out = { 0, 3 };
+	for (const char *c = text; *c; ++c) {
+		out.push_back((u8)*c);
+		out.push_back(0);
+	}
+	out[0] = (u8)out.size();
+	return true;
+}
+
+// A control request of the standard type. Whatever isn't answered gets an empty reply.
+static void UsbLinkHandleStandardRequest(const PspUsbDriver *drv, const std::vector<u8> &packet) {
+	const u8 requestType = packet[4];
+	const u8 request = packet[5];
+	const u16 value = packet[6] | (packet[7] << 8);
+	const u16 length = packet[10] | (packet[11] << 8);
+
+	if (requestType == 0x80 && request == 6) { // GET_DESCRIPTOR
+		const u8 type = value >> 8;
+		const u8 index = value & 0xff;
+		std::vector<u8> desc;
+		bool ok = false;
+		switch (type) {
+		case 1:
+			ok = UsbBuildDeviceDescriptor(drv->devp_hi ? drv->devp_hi : drv->devp, desc);
+			break;
+		case 2:
+			ok = UsbBuildConfigDescriptor(drv->confp_hi ? drv->confp_hi : drv->confp, desc);
+			break;
+		case 3:
+			ok = UsbBuildStringDescriptor(drv, index, desc);
+			break;
+		}
+		INFO_LOG(Log::HLE, "pspcm_manager: GET_DESCRIPTOR type=%d index=%d -> %s %d bytes", type, index, ok ? "ok" : "none", ok ? (int)desc.size() : 0);
+		if (ok) {
+			if (desc.size() > 0x40) {
+				WARN_LOG(Log::HLE, "pspcm_manager: descriptor of %d bytes, only 0x40 fit a packet", (int)desc.size());
+			}
+			UsbLinkSendControlReply(desc.data(), std::min<u32>((u32)desc.size(), length));
+		} else {
+			UsbLinkSendControlReply(nullptr, 0);
+		}
+		return;
+	}
+
+	WARN_LOG(Log::HLE, "pspcm_manager: standard request %02x/%02x not handled", requestType, request);
+	if (requestType & 0x80) {
+		UsbLinkSendControlReply(nullptr, 0);
+	} else {
+		UsbLinkSendAck();
+	}
 }
 
 static void UsbLinkHandleMsg(UsbLinkMsg &msg) {
@@ -613,6 +860,13 @@ static void UsbLinkHandleMsg(UsbLinkMsg &msg) {
 		}
 
 		const u8 requestType = msg.data[4];
+		if ((requestType & 0x60) == 0) {
+			// Standard: the reply reuses the header of the request.
+			memcpy(gRecvBuffer, msg.data.data(), 12);
+			gRecvLen = 12;
+			UsbLinkHandleStandardRequest(drv, msg.data);
+			break;
+		}
 		// A device to host request may come padded to wLength, that isn't data for sceUsbbdReqRecv.
 		gRecvLen = (requestType & 0x80) ? 12 : (int)msg.data.size();
 		memcpy(gRecvBuffer, msg.data.data(), msg.data.size());
@@ -623,9 +877,23 @@ static void UsbLinkHandleMsg(UsbLinkMsg &msg) {
 
 		// Host Out and no data -> sceUsbbdReqRecv isn't called, send an empty reply here
 		if ((requestType & 0x80) == 0 && length == 0) {
-			const char resp[] = { (char)0xf0, 0x0f, 0x04, 0x00 };
-			send_to_ps3(resp, sizeof(resp));
+			UsbLinkSendAck();
 		}
+		break;
+	}
+
+	case UsbLinkMsgType::IN_REQUEST: {
+		const int endpoint = msg.endpoint & 0xf;
+		if (endpoint == 0 || endpoint >= USB_LINK_MAX_ENDPOINTS) {
+			break;
+		}
+		if (usbHostWaiting[endpoint]) {
+			// Already asked, and not answered yet.
+			DEBUG_LOG(Log::HLE, "pspcm_manager: duplicate IN request on endpoint %d dropped", endpoint);
+			break;
+		}
+		usbHostWaiting[endpoint] = true;
+		UsbLinkServeIn(endpoint, false);
 		break;
 	}
 
@@ -943,6 +1211,17 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 			return hleLogError(Log::HLE, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad request");
 		}
 		req.NotifyRead("sceUsbbdReqSend");
+		
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend: endpointPtr=0x%02x", req->endpointPtr);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        data=0x%02x", req->data);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        size=0x%02x", req->size);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   isCtrlReq=0x%02x", req->isControlRequest);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   onComplCb=0x%02x", req->onComplete_func);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend: transmitted=0x%02x", req->transmitted);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:  returnCode=0x%02x", req->returnCode);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend: nextRequest=0x%02x", req->nextRequest);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:         arg=0x%02x", req->arg);
+		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        link=0x%02x", req->link);
 
 		const UsbEndpoint *ep = (const UsbEndpoint *)Memory::GetPointerUnchecked(req->endpointPtr);
 		const int endpoint = ep->endpointAddres & 0xf;
@@ -957,17 +1236,16 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 		if (endpoint == 0) {
 			// The reply to a control request keeps the header of the request.
 			// It says how much it carries (the host's wLength is only the most it takes).
-			const u32 replySize = std::min<u32>(size, 0x40);
-			char reply[12 + 0x40];
-			memcpy(reply, gRecvBuffer, 12);
-			memcpy(reply + 12, data, replySize);
-			reply[2] = (char)(12 + replySize);
-			reply[10] = (char)(replySize & 0xff);
-			reply[11] = (char)(replySize >> 8);
-			send_to_ps3(reply, 12 + replySize);
+			UsbLinkSendControlReply(data, size);
 		} else {
-			// The driver's endpoint number plus the direction: a send is device to host.
-			UsbLinkSendToHost(endpoint | 0x80, data, size);
+			// Waits for the host to ask for it. It completes when it's sent.
+			if (endpoint < USB_LINK_MAX_ENDPOINTS) {
+				usbPendingSend[endpoint].push_back(reqAddr);
+				const u32 next = req->nextRequest;
+				UsbLinkServeIn(endpoint, true);
+				reqAddr = next;
+				continue;
+			}
 		}
 
 		req->transmitted = size;
@@ -985,14 +1263,26 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 
 static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 	auto req = PSPPointer<UsbdDeviceRequest>::Create(usbDeviceReqAddr);
-	if (!req.IsValid() || !Memory::IsValidRange(req->endpointPtr, sizeof(UsbEndpoint))) {
+	if (!req.IsValid() || !Memory::IsValidRange(usbDeviceReqAddr, sizeof(UsbEndpoint))) {
 		return hleLogError(Log::HLE, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad request");
 	}
 	req.NotifyRead("sceUsbbdReqRecv");
 
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: endpointPtr=0x%02x", req->endpointPtr);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        data=0x%02x", req->data);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        size=0x%02x", req->size);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   isCtrlReq=0x%02x", req->isControlRequest);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   onComplCb=0x%02x", req->onComplete_func);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: transmitted=0x%02x", req->transmitted);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:  returnCode=0x%02x", req->returnCode);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: nextRequest=0x%02x", req->nextRequest);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:         arg=0x%02x", req->arg);
+	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        link=0x%02x", req->link);
+
 	const UsbEndpoint *ep = (const UsbEndpoint *)Memory::GetPointerUnchecked(req->endpointPtr);
 	const int endpoint = ep->endpointAddres & 0xf;
-	INFO_LOG(Log::HLE, "sceUsbbdReqRecv: ep=0x%02x, sz=0x%x", ep->endpointAddres, req->size);
+	INFO_LOG(Log::HLE, "sceUsbbdReqRecv: ep=0x%02x/0x%02x/0x%02x, sz=0x%x",
+		ep->endpointAddres, ep->unk1, ep->unk2, req->size);
 
 	if (endpoint != 0) {
 		// Data the host sent already, or the request waits for it (see UsbLinkHandleMsg).
@@ -1019,10 +1309,10 @@ static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 		req->returnCode = 0;
 		req.NotifyWrite("sceUsbbdReqRecv");
 
-		// Host out, reply with the same packet. The data is consumed, a later request mustn't see it again.
-		const int packetLen = gRecvLen;
+		// Host out: the data is consumed (a later request mustn't see it again), and acknowledged with
+		// the empty packet, whatever the request carried.
 		gRecvLen = 12;
-		send_to_ps3(gRecvBuffer, packetLen);
+		UsbLinkSendAck();
 
 		if (req->onComplete_func != 0) {
 			INFO_LOG(Log::HLE, "sceUsbbdReqRecv: cb done");

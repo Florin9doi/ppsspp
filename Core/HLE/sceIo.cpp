@@ -1662,6 +1662,7 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 
 static u32 sceIoOpen(const char *filename, int flags, int mode) {
 	hleEatCycles(18000);
+	INFO_LOG(Log::HLE, "sceIoOpen: filename=%s", filename);
 
 	if (!filename) {
 		// Not tested on the PSP.
