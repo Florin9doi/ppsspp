@@ -819,13 +819,13 @@ static void UsbLinkHandleStandardRequest(const PspUsbDriver *drv, const std::vec
 		std::vector<u8> desc;
 		bool ok = false;
 		switch (type) {
-		case 1:
+		case 1: // device desc
 			ok = UsbGetDeviceDescriptor(drv, desc);
 			break;
-		case 2:
+		case 2: // config desc
 			ok = UsbGetConfigDescriptor(drv, desc);
 			break;
-		case 3:
+		case 3: // string desc
 			ok = UsbBuildStringDescriptor(drv, index, desc);
 			break;
 		}
@@ -1363,12 +1363,21 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 		sceUsbConfig.pspUsbDriver = *usbDrv;
 		usbDrv.NotifyRead("sceUsbbdRegister");
 	}
-	INFO_LOG(Log::HLE, "sceUsbbdRegister name : %s", Memory::GetPointerOrException(sceUsbConfig.pspUsbDriver.name));
-	INFO_LOG(Log::HLE, "sceUsbbdRegister endpoints : %d", sceUsbConfig.pspUsbDriver.endpoints);
-	for (int i = 0; i < sceUsbConfig.pspUsbDriver.endpoints; i++) {
-		auto& ep = PSPPointer<UsbEndpoint>::Create(sceUsbConfig.pspUsbDriver.endp)[i];
-		INFO_LOG(Log::HLE, "       endp[%d] : %02x %02x %02x", i, ep.endpointAddres, ep.unk1, ep.unk2);
-	}
+	INFO_LOG(Log::HLE, "sceUsbbdRegister name : %s", Memory::GetPointerOrException(Usbd::getUsbDriver()->name));
+	INFO_LOG(Log::HLE, "sceUsbbdRegister endpoints : %d", Usbd::getUsbDriver()->endpoints);
+	//for (int i = 0; i < Usbd::getUsbDriver()->endpoints; i++) {
+	//	auto& ep = PSPPointer<UsbEndpoint>::Create(Usbd::getUsbDriver()->endp)[i];
+	//	INFO_LOG(Log::HLE, "       endp[%d] : %02x %02x %02x", i, ep.endpointAddres, ep.unk1, ep.unk2);
+	//}
+	INFO_LOG(Log::HLE, "sceUsbbdRegister devp_hi : %x", Usbd::getUsbDriver()->devp_hi);
+	INFO_LOG(Log::HLE, "sceUsbbdRegister confp_hi : %x", Usbd::getUsbDriver()->confp_hi);
+	INFO_LOG(Log::HLE, "sceUsbbdRegister devp : %x", Usbd::getUsbDriver()->devp);
+	INFO_LOG(Log::HLE, "sceUsbbdRegister confp : %x", Usbd::getUsbDriver()->confp);
+	INFO_LOG(Log::HLE, "sceUsbbdRegister str : %x", Usbd::getUsbDriver()->str);
+	//auto& strp = PSPPointer<u8>::Create(Usbd::getUsbDriver()->str);
+	//for (int i = 0; i < 0x1a * 2 + 2; i++) {
+	//	INFO_LOG(Log::HLE, "       str[%d] : %02x", i, strp[i]);
+	//}
 	INFO_LOG(Log::HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
 	INFO_LOG(Log::HLE, "sceUsbbdRegister intf_chang : %x", Usbd::getUsbDriver()->intf_chang_func);
 	INFO_LOG(Log::HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
