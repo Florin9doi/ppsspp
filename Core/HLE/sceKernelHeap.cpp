@@ -293,6 +293,7 @@ const HLEFunction SysMemForKernel[] = {
 	{ 0x23d81675, &WrapI_II<sceKernelAllocHeapMemory>,             "sceKernelAllocHeapMemory",           'x', "ii",    HLE_KERNEL_SYSCALL },
 	{ 0xf2284ecc, &WrapI_IUU<sceKernelAllocHeapMemoryWithOption>,  "sceKernelAllocHeapMemoryWithOption", 'i', "ixp" ,  HLE_KERNEL_SYSCALL },
 	{ 0xdd6512d0, &WrapI_I<sceKernelDeleteHeap>,                   "sceKernelDeleteHeap",                'i', "i" ,    HLE_KERNEL_SYSCALL },
+	{ 0x87c2ab85, &WrapI_IU<sceKernelFreeHeapMemory>,              "sceKernelFreeHeapMemory",            'i', "ix" ,   HLE_KERNEL_SYSCALL },
 };
 
 void Register_SysMemForKernel() {

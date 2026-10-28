@@ -1358,21 +1358,20 @@ static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 	}
 	req.NotifyRead("sceUsbbdReqRecv");
 
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: endpointPtr=0x%02x", req->endpointPtr);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        data=0x%02x", req->data);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        size=0x%02x", req->size);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   isCtrlReq=0x%02x", req->isControlRequest);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   onComplCb=0x%02x", req->onComplete_func);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: transmitted=0x%02x", req->transmitted);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:  returnCode=0x%02x", req->returnCode);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: nextRequest=0x%02x", req->nextRequest);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:         arg=0x%02x", req->arg);
-	INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        link=0x%02x", req->link);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: endpointPtr=0x%02x", req->endpointPtr);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        data=0x%02x", req->data);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        size=0x%02x", req->size);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   isCtrlReq=0x%02x", req->isControlRequest);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   onComplCb=0x%02x", req->onComplete_func);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: transmitted=0x%02x", req->transmitted);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:  returnCode=0x%02x", req->returnCode);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: nextRequest=0x%02x", req->nextRequest);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:         arg=0x%02x", req->arg);
+	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        link=0x%02x", req->link);
 
 	const UsbEndpoint *ep = (const UsbEndpoint *)Memory::GetPointerUnchecked(req->endpointPtr);
 	const int endpoint = ep->endpointAddres & 0xf;
-	INFO_LOG(Log::HLE, "sceUsbbdReqRecv: ep=0x%02x/0x%02x/0x%02x, sz=0x%x",
-		ep->endpointAddres, ep->unk1, ep->unk2, req->size);
+	//INFO_LOG(Log::HLE, "sceUsbbdReqRecv: ep=0x%02x/0x%02x/0x%02x, sz=0x%x", ep->endpointAddres, ep->unk1, ep->unk2, req->size);
 
 	if (endpoint != 0) {
 		// Data the host sent already, or the request waits for it (see UsbLinkHandleMsg).
@@ -1432,7 +1431,7 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 	INFO_LOG(Log::HLE, "sceUsbbdRegister confp : %x", Usbd::getUsbDriver()->confp);
 	INFO_LOG(Log::HLE, "sceUsbbdRegister str : %x", Usbd::getUsbDriver()->str);
 	//auto& strp = PSPPointer<u8>::Create(Usbd::getUsbDriver()->str);
-	//for (int i = 0; i < 0x1a * 2 + 2; i++) {
+	//for (int i = 0; i < 0x1a; i++) {
 	//	INFO_LOG(Log::HLE, "       str[%d] : %02x", i, strp[i]);
 	//}
 	INFO_LOG(Log::HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
