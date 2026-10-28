@@ -2152,7 +2152,7 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
 				u32 threadID = Memory::ReadOrException_U32(argAddr);
 				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : register USB : threadID = 0x%08x/%d", threadID, threadID);
-				sceKernelStartThread(threadID, 0, 0);
+				__UsbRegisterThread(threadID);
 				return 0;
 			}
 			break;
@@ -2160,6 +2160,7 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
 				u32 threadID = Memory::ReadOrException_U32(argAddr);
 				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : unregister USB : threadID = 0x%08x/%d", threadID, threadID);
+				__UsbUnregisterThread(threadID);
 				return 0;
 			}
 			break;

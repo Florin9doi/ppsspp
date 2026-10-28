@@ -1004,10 +1004,54 @@ static void UsbLinkStop() {
 }
 
 
+// usbpspcm.prx registers a thread (sceIoDevctl 0x03415001) that is started once the USB is
+// activated. It is started with 8 bytes of arguments: 0, then flags saying the USB is connected.
+static int usbRegisteredThread = -1;
+static bool usbRegisteredThreadStarted = false;
+static u32 usbStartThreadParams = 0;
+
+static void UsbStartRegisteredThread() {
+	if (!usbActivated || usbRegisteredThreadStarted || usbRegisteredThread < 0) {
+		return;
+	}
+	if (usbStartThreadParams == 0) {
+		u32 size = 8;
+		u32 addr = kernelMemory.Alloc(size, false, "sceUsbPspcm thread parameters");
+		if (addr == 0 || addr == (u32)-1) {
+			ERROR_LOG(Log::HLE, "sceUsbPspcm: no memory for the thread parameters");
+			return;
+		}
+		usbStartThreadParams = addr;
+	}
+
+	const u32 params[2] = { 0, 0x80 | 0x01 }; // the second one: the USB is in connected state
+	Memory::Memcpy(usbStartThreadParams, params, sizeof(params), "UsbThreadParams");
+
+	usbRegisteredThreadStarted = true;
+	int ret = __KernelStartThread(usbRegisteredThread, 8, usbStartThreadParams);
+	INFO_LOG(Log::HLE, "sceUsbPspcm: started the registered thread 0x%x = %08x", usbRegisteredThread, ret);
+}
+
+void __UsbRegisterThread(int threadId) {
+	usbRegisteredThread = threadId;
+	usbRegisteredThreadStarted = false;
+	UsbStartRegisteredThread();
+}
+
+void __UsbUnregisterThread(int threadId) {
+	if (usbRegisteredThread == threadId) {
+		usbRegisteredThread = -1;
+		usbRegisteredThreadStarted = false;
+	}
+}
+
 void __UsbInit() {
 	usbStarted = false;
 	usbConnected = true;
 	usbActivated = false;
+	usbRegisteredThread = -1;
+	usbRegisteredThreadStarted = false;
+	usbStartThreadParams = 0;
 	waitingThreads.clear();
 
 	usbWaitTimer = CoreTiming::RegisterEvent("UsbWaitTimeout", UsbWaitExecTimeout);
@@ -1021,7 +1065,7 @@ void __UsbShutdown() {
 }
 
 void __UsbDoState(PointerWrap &p) {
-	auto s = p.Section("sceUsb", 1, 5);
+	auto s = p.Section("sceUsb", 1, 6);
 	if (!s)
 		return;
 
@@ -1057,6 +1101,16 @@ void __UsbDoState(PointerWrap &p) {
 	} else {
 		linkRunning = false;
 		guestAttached = false;
+	}
+
+	if (s >= 6) {
+		Do(p, usbRegisteredThread);
+		Do(p, usbRegisteredThreadStarted);
+		Do(p, usbStartThreadParams);
+	} else {
+		usbRegisteredThread = -1;
+		usbRegisteredThreadStarted = false;
+		usbStartThreadParams = 0;
 	}
 
 	if (p.mode == PointerWrap::MODE_READ) {
@@ -1143,6 +1197,7 @@ static int sceUsbActivate(u32 pid) {
 	}
 
 	UsbUpdateState();
+	UsbStartRegisteredThread();
 
 	return hleLogDebug(Log::HLE, 0);
 }
@@ -1150,6 +1205,8 @@ static int sceUsbActivate(u32 pid) {
 static int sceUsbDeactivate() {
 	INFO_LOG(Log::HLE, "sceUsbDeactivate()");
 	usbActivated = false;
+	// Activating again starts the registered thread again (if it ended).
+	usbRegisteredThreadStarted = false;
 	UsbUpdateState();
 
 	if (psLinkRunning) {
