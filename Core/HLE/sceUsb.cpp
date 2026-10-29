@@ -115,11 +115,17 @@ static u32 usbControlReqAddr = 0;
 // Bulk data from the host that no sceUsbbdReqRecv has asked for yet, and the requests waiting for data.
 static std::deque<std::vector<u8>> usbRxQueue[USB_LINK_MAX_ENDPOINTS];
 static std::deque<u32> usbPendingRecv[USB_LINK_MAX_ENDPOINTS];
-// Device to host: sceUsbbdReqSend requests wait here until the host asks for data on that endpoint,
-// like on a real bus. The host asks once per endpoint and waits for the answer, usbHostWaiting
-// collapses the repeated asks.
-static std::deque<u32> usbPendingSend[USB_LINK_MAX_ENDPOINTS];
+// Device to host data waits until the host asks for it on that endpoint, like on a real bus. The host
+// asks once per endpoint and waits for the answer, usbHostWaiting collapses the repeated asks.
 static bool usbHostWaiting[USB_LINK_MAX_ENDPOINTS];
+// What waits to be sent to the host, one queue per IN endpoint (1: bulk IN 0x81, 3: interrupt IN 0x83).
+// An entry goes out when the host asks for data on its endpoint, in the order they were queued.
+struct UsbInEntry {
+	u32 reqAddr = 0;       // a sceUsbbdReqSend request of the driver, or 0:
+	std::vector<u8> data;  // data the app wrote to "usbpspcm0:"
+};
+static std::deque<UsbInEntry> usbInQueue[USB_LINK_MAX_ENDPOINTS];
+static const size_t USB_IN_QUEUE_MAX = 256; // of the writes of the app
 
 enum UsbStatus {
 	USB_STATUS_STOPPED      = 0x001,
@@ -546,7 +552,7 @@ static void UsbLinkResetEndpoints() {
 	for (int i = 0; i < USB_LINK_MAX_ENDPOINTS; ++i) {
 		usbRxQueue[i].clear();
 		usbPendingRecv[i].clear();
-		usbPendingSend[i].clear();
+		usbInQueue[i].clear();
 		usbHostWaiting[i] = false;
 	}
 }
@@ -579,14 +585,24 @@ static bool UsbFillRecv(u32 reqAddr, int endpoint) {
 	return true;
 }
 
-// Sends the data of the oldest waiting sceUsbbdReqSend if the host asked for this endpoint.
+// Sends the oldest entry of the endpoint's queue if the host asked for it.
 // inHle: called from an HLE function, where the completion is queued instead of called directly.
 static void UsbLinkServeIn(int endpoint, bool inHle) {
-	if (!usbHostWaiting[endpoint] || usbPendingSend[endpoint].empty()) {
+	if (!usbHostWaiting[endpoint] || usbInQueue[endpoint].empty()) {
 		return;
 	}
-	const u32 reqAddr = usbPendingSend[endpoint].front();
-	usbPendingSend[endpoint].pop_front();
+	UsbInEntry entry = std::move(usbInQueue[endpoint].front());
+	usbInQueue[endpoint].pop_front();
+
+	if (entry.reqAddr == 0) {
+		// Written by the app.
+		usbHostWaiting[endpoint] = false;
+		INFO_LOG(Log::HLE, "pspcm: %d bytes written by the app sent on endpoint 0x%02x", (int)entry.data.size(), endpoint | 0x80);
+		UsbLinkSendToHost(endpoint | 0x80, entry.data.data(), (u32)entry.data.size());
+		return;
+	}
+
+	const u32 reqAddr = entry.reqAddr;
 	auto req = PSPPointer<UsbdDeviceRequest>::Create(reqAddr);
 	if (!req.IsValid()) {
 		return;
@@ -847,6 +863,27 @@ static void UsbLinkHandleStandardRequest(const PspUsbDriver *drv, const std::vec
 	} else {
 		UsbLinkSendAck();
 	}
+}
+
+int __UsbPspcmWrite(int endpoint, const u8 *data, u32 size) {
+	if (endpoint != 1 && endpoint != 3) {
+		ERROR_LOG(Log::HLE, "pspcm: endpoint %d isn't an IN endpoint (1 bulk, 3 interrupt)", endpoint);
+		return 0;
+	}
+	if (!data || size == 0) {
+		return 0;
+	}
+	auto &queue = usbInQueue[endpoint];
+	if (queue.size() >= USB_IN_QUEUE_MAX) {
+		WARN_LOG(Log::HLE, "pspcm: the queue of endpoint %d is full, dropping the oldest", endpoint);
+		queue.pop_front();
+	}
+	UsbInEntry entry;
+	entry.data.assign(data, data + size);
+	queue.push_back(std::move(entry));
+	// The host may be waiting already.
+	UsbLinkServeIn(endpoint, true);
+	return (int)size;
 }
 
 static void UsbLinkHandleMsg(UsbLinkMsg &msg) {
@@ -1330,7 +1367,9 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 		} else {
 			// Waits for the host to ask for it. It completes when it's sent.
 			if (endpoint < USB_LINK_MAX_ENDPOINTS) {
-				usbPendingSend[endpoint].push_back(reqAddr);
+				UsbInEntry entry;
+				entry.reqAddr = reqAddr;
+				usbInQueue[endpoint].push_back(std::move(entry));
 				const u32 next = req->nextRequest;
 				UsbLinkServeIn(endpoint, true);
 				reqAddr = next;

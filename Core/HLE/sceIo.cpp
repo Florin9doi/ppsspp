@@ -246,7 +246,7 @@ public:
 	}
 
 	void DoState(PointerWrap &p) override {
-		auto s = p.Section("FileNode", 1, 3);
+		auto s = p.Section("FileNode", 1, 4);
 		if (!s)
 			return;
 
@@ -299,6 +299,9 @@ public:
 		if (s >= 3) {
 			Do(p, isTTY);
 		}
+		if (s >= 4) {
+			Do(p, isPspCm);
+		}
 		Do(p, pausedWaits);
 	}
 
@@ -331,6 +334,8 @@ public:
 	std::map<SceUID, u64> pausedWaits;
 
 	bool isTTY = false;
+	// "usbpspcm0:", what is written goes to the host through sceUsb.
+	bool isPspCm = false;
 };
 
 /******************************************************************************/
@@ -1295,6 +1300,13 @@ static bool __IoWrite(int &result, int id, u32 data_addr, int size, int &us) {
 		const std::string tag = "IoWrite/" + IODetermineFilename(f);
 		NotifyMemInfo(MemBlockFlags::READ, data_addr, size, tag.c_str(), tag.size());
 
+		if (f->isPspCm) {
+			// Where the writes go: 1 is the bulk IN endpoint (0x81), 3 the interrupt IN one (0x83).
+			static const int pspcmWriteEndpoint = 1;
+			result = __UsbPspcmWrite(pspcmWriteEndpoint, (const u8 *)data_ptr, validSize);
+			return true;
+		}
+
 		if (f->isTTY) {
 			__IoWriteToHostOutput(DebugOutputChannel::StdOut, (const char *)data_ptr, validSize, size, "tty");
 			result = validSize;
@@ -1406,7 +1418,7 @@ static u32 sceIoGetDevType(int id) {
 	if (f) {
 		// TODO: When would this return PSP_DEV_TYPE_ALIAS?
 		WARN_LOG(Log::sceIo, "sceIoGetDevType(%d - %s)", id, f->fullpath.c_str());
-		if (f->isTTY)
+		if (f->isTTY || f->isPspCm)
 			result = (u32)PSPDevType::FILE;
 		else
 			result = (u32)pspFileSystem.DevType(f->handle) & (u32)PSPDevType::EMU_MASK;
@@ -1617,6 +1629,7 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 	PSPFileInfo info;
 	int h = -1;
 	bool isTTY = false;
+	bool isPspCm = false;
 	// TODO: Technically, tty1, etc. too and space doesn't matter.
 	if (startsWithNoCase(filename, "tty0:")) {
 		info.name = filename;
@@ -1633,6 +1646,13 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 		info.exists = true;
 
 		isTTY = true;
+	} else if (startsWithNoCase(filename, "usbpspcm0:")) {
+		// The device usbpspcm.prx registered: no file behind it, the data goes to the host.
+		info.name = filename;
+		info.access = 0777;
+		info.exists = true;
+
+		isPspCm = true;
 	} else {
 		h = pspFileSystem.OpenFile(filename, (FileAccess)(access | (int)FileAccess::FILEACCESS_PPSSPP_QUIET));
 		if (h < 0) {
@@ -1647,12 +1667,13 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 	f->handle = h;
 	f->fullpath = filename;
 	f->asyncResult = h;
-	if (isTTY) {
+	if (isTTY || isPspCm) {
 		f->info = info;
 		f->infoReady = true;
 	}
 	f->openMode = access;
 	f->isTTY = isTTY;
+	f->isPspCm = isPspCm;
 
 	f->npdrm = (flags & PSP_O_NPDRM)? true: false;
 	f->pgd_offset = 0;
@@ -1701,7 +1722,7 @@ static u32 sceIoOpen(const char *filename, int flags, int mode) {
 	} else {
 		asyncParams[id].priority = asyncDefaultPriority;
 		IFileSystem *sys = pspFileSystem.GetSystemFromFilename(filename);
-		if (sys && !f->isTTY && (sys->DevType(f->handle) & (PSPDevType::BLOCK | PSPDevType::EMU_LBN))) {
+		if (sys && !f->isTTY && !f->isPspCm && (sys->DevType(f->handle) & (PSPDevType::BLOCK | PSPDevType::EMU_LBN))) {
 			// These are fast to open, no delay or even rescheduling happens.
 			return hleLogDebug(Log::sceIo, id);
 		}
