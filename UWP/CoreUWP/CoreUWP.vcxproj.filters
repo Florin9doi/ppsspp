@@ -159,6 +159,7 @@
     <ClCompile Include="..\..\Core\HLE\sceSircs.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceSsl.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUmd.cpp" />
+    <ClCompile Include="..\..\Core\HLE\pspcm_manager.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUsb.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUsbAcc.cpp" />
     <ClCompile Include="..\..\Core\HLE\sceUsbCam.cpp" />
@@ -582,6 +583,7 @@
     <ClInclude Include="..\..\Core\HLE\sceSircs.h" />
     <ClInclude Include="..\..\Core\HLE\sceSsl.h" />
     <ClInclude Include="..\..\Core\HLE\sceUmd.h" />
+    <ClInclude Include="..\..\Core\HLE\pspcm_manager.h" />
     <ClInclude Include="..\..\Core\HLE\sceUsb.h" />
     <ClInclude Include="..\..\Core\HLE\sceUsbAcc.h" />
     <ClInclude Include="..\..\Core\HLE\sceUsbCam.h" />

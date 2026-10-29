@@ -420,6 +420,9 @@
     <ClCompile Include="HW\SasAudio.cpp">
       <Filter>HW</Filter>
     </ClCompile>
+    <ClCompile Include="HLE\pspcm_manager.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
     <ClCompile Include="HLE\sceUsb.cpp">
       <Filter>HLE\Libraries</Filter>
     </ClCompile>
@@ -1742,6 +1745,9 @@
     </ClInclude>
     <ClInclude Include="HW\SasAudio.h">
       <Filter>HW</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\pspcm_manager.h">
+      <Filter>HLE\Libraries</Filter>
     </ClInclude>
     <ClInclude Include="HLE\sceUsb.h">
       <Filter>HLE\Libraries</Filter>

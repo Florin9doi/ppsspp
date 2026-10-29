@@ -545,6 +545,8 @@ add_library(Core STATIC
 	HLE/sceSsl.h
 	HLE/sceUmd.cpp
 	HLE/sceUmd.h
+	HLE/pspcm_manager.cpp
+	HLE/pspcm_manager.h
 	HLE/sceUsb.cpp
 	HLE/sceUsb.h
 	HLE/sceUsbAcc.cpp

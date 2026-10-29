@@ -674,6 +674,7 @@
     <ClCompile Include="HLE\sceSircs.cpp" />
     <ClCompile Include="HLE\sceSsl.cpp" />
     <ClCompile Include="HLE\sceUmd.cpp" />
+    <ClCompile Include="HLE\pspcm_manager.cpp" />
     <ClCompile Include="HLE\sceUsb.cpp" />
     <ClCompile Include="HLE\sceUsbGps.cpp" />
     <ClCompile Include="HLE\sceUtility.cpp" />
@@ -1015,6 +1016,7 @@
     <ClInclude Include="HLE\sceSircs.h" />
     <ClInclude Include="HLE\sceSsl.h" />
     <ClInclude Include="HLE\sceUmd.h" />
+    <ClInclude Include="HLE\pspcm_manager.h" />
     <ClInclude Include="HLE\sceUsb.h" />
     <ClInclude Include="HLE\sceUsbGps.h" />
     <ClInclude Include="HLE\sceUtility.h" />

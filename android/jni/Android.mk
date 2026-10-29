@@ -847,6 +847,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/HLE/sceSircs.cpp \
   $(SRC)/Core/HLE/sceSsl.cpp \
   $(SRC)/Core/HLE/sceUmd.cpp \
+  $(SRC)/Core/HLE/pspcm_manager.cpp \
   $(SRC)/Core/HLE/sceUsb.cpp \
   $(SRC)/Core/HLE/sceUsbAcc.cpp \
   $(SRC)/Core/HLE/sceUsbCam.cpp \
