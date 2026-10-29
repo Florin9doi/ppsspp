@@ -334,7 +334,6 @@ public:
 	std::map<SceUID, u64> pausedWaits;
 
 	bool isTTY = false;
-	// "usbpspcm0:", what is written goes to the host through sceUsb.
 	bool isPspCm = false;
 };
 
@@ -1300,16 +1299,15 @@ static bool __IoWrite(int &result, int id, u32 data_addr, int size, int &us) {
 		const std::string tag = "IoWrite/" + IODetermineFilename(f);
 		NotifyMemInfo(MemBlockFlags::READ, data_addr, size, tag.c_str(), tag.size());
 
-		if (f->isPspCm) {
-			// Where the writes go: 1 is the bulk IN endpoint (0x81), 3 the interrupt IN one (0x83).
-			static const int pspcmWriteEndpoint = 1;
-			result = __UsbPspcmWrite(pspcmWriteEndpoint, (const u8 *)data_ptr, validSize);
-			return true;
-		}
-
 		if (f->isTTY) {
 			__IoWriteToHostOutput(DebugOutputChannel::StdOut, (const char *)data_ptr, validSize, size, "tty");
 			result = validSize;
+			return true;
+		}
+		if (f->isPspCm) {
+			// Where the writes go: 1 is the bulk IN endpoint (0x81), 3 the interrupt IN one (0x83).
+			static const int pspcmWriteEndpoint = 3;
+			result = __UsbPspcmWrite(pspcmWriteEndpoint, (const u8 *)data_ptr, validSize);
 			return true;
 		}
 
@@ -1647,7 +1645,6 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 
 		isTTY = true;
 	} else if (startsWithNoCase(filename, "usbpspcm0:")) {
-		// The device usbpspcm.prx registered: no file behind it, the data goes to the host.
 		info.name = filename;
 		info.access = 0777;
 		info.exists = true;
@@ -2185,6 +2182,11 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 			}
 			break;
 		case 0x03435005: // Bind
+			if (Memory::IsValidRange(outPtr, outLen) && outLen >= 11) {
+				Memory::Memcpy(outPtr, "usbpspcm0:", 11, "UsbPspcmBind");
+				return hleLogDebug(Log::sceIo, 0);
+			}
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad output buffer");
 		default:
 			ERROR_LOG(Log::sceIo, "UNIMPL sceIoDevctl(\"%s\", %08x, %08x, %i, %08x, %i)", name, cmd, argAddr, argLen, outPtr, outLen);
 			return 0;

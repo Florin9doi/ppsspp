@@ -974,16 +974,16 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 		}
 		req.NotifyRead("sceUsbbdReqSend");
 		
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend: endpointPtr=0x%02x", req->endpointPtr);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        data=0x%02x", req->data);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        size=0x%02x", req->size);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   isCtrlReq=0x%02x", req->isControlRequest);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   onComplCb=0x%02x", req->onComplete_func);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend: transmitted=0x%02x", req->transmitted);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:  returnCode=0x%02x", req->returnCode);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend: nextRequest=0x%02x", req->nextRequest);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:         arg=0x%02x", req->arg);
-		INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        link=0x%02x", req->link);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend: endpointPtr=0x%02x", req->endpointPtr);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        data=0x%02x", req->data);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        size=0x%02x", req->size);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   isCtrlReq=0x%02x", req->isControlRequest);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   onComplCb=0x%02x", req->onComplete_func);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend: transmitted=0x%02x", req->transmitted);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:  returnCode=0x%02x", req->returnCode);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend: nextRequest=0x%02x", req->nextRequest);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:         arg=0x%02x", req->arg);
+		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        link=0x%02x", req->link);
 
 		const UsbEndpoint *ep = (const UsbEndpoint *)Memory::GetPointerUnchecked(req->endpointPtr);
 		const int endpoint = ep->endpointAddres & 0xf;
@@ -1094,27 +1094,27 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 		usbDrv.NotifyRead("sceUsbbdRegister");
 	}
 	INFO_LOG(Log::HLE, "sceUsbbdRegister name : %s", Memory::GetPointerOrException(Usbd::getUsbDriver()->name));
-	INFO_LOG(Log::HLE, "sceUsbbdRegister endpoints : %d", Usbd::getUsbDriver()->endpoints);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister endpoints : %d", Usbd::getUsbDriver()->endpoints);
 	//for (int i = 0; i < Usbd::getUsbDriver()->endpoints; i++) {
 	//	auto& ep = PSPPointer<UsbEndpoint>::Create(Usbd::getUsbDriver()->endp)[i];
 	//	INFO_LOG(Log::HLE, "       endp[%d] : %02x %02x %02x", i, ep.endpointAddres, ep.unk1, ep.unk2);
 	//}
-	INFO_LOG(Log::HLE, "sceUsbbdRegister devp_hi : %x", Usbd::getUsbDriver()->devp_hi);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister confp_hi : %x", Usbd::getUsbDriver()->confp_hi);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister devp : %x", Usbd::getUsbDriver()->devp);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister confp : %x", Usbd::getUsbDriver()->confp);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister str : %x", Usbd::getUsbDriver()->str);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister devp_hi : %x", Usbd::getUsbDriver()->devp_hi);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister confp_hi : %x", Usbd::getUsbDriver()->confp_hi);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister devp : %x", Usbd::getUsbDriver()->devp);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister confp : %x", Usbd::getUsbDriver()->confp);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister str : %x", Usbd::getUsbDriver()->str);
 	//auto& strp = PSPPointer<u8>::Create(Usbd::getUsbDriver()->str);
 	//for (int i = 0; i < 0x1a; i++) {
 	//	INFO_LOG(Log::HLE, "       str[%d] : %02x", i, strp[i]);
 	//}
-	INFO_LOG(Log::HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister intf_chang : %x", Usbd::getUsbDriver()->intf_chang_func);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister detach : %x", Usbd::getUsbDriver()->detach_func);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister configure : %x", Usbd::getUsbDriver()->configure_func);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister start_func : %x", Usbd::getUsbDriver()->start_func);
-	INFO_LOG(Log::HLE, "sceUsbbdRegister stop_func : %x", Usbd::getUsbDriver()->stop_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister intf_chang : %x", Usbd::getUsbDriver()->intf_chang_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister detach : %x", Usbd::getUsbDriver()->detach_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister configure : %x", Usbd::getUsbDriver()->configure_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister start_func : %x", Usbd::getUsbDriver()->start_func);
+	//INFO_LOG(Log::HLE, "sceUsbbdRegister stop_func : %x", Usbd::getUsbDriver()->stop_func);
 	return 0;
 }
 

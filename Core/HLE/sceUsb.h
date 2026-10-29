@@ -26,9 +26,6 @@ void __UsbShutdown();
 // The thread usbpspcm.prx registers, started when the USB is activated.
 void __UsbRegisterThread(int threadId);
 void __UsbUnregisterThread(int threadId);
-
-// What the PSP app wrote to "usbpspcm0:". It's queued for an IN endpoint (1: bulk IN, 3: interrupt IN),
-// each has its own queue, and sent when the host asks for data on that endpoint. Returns the size taken.
 int __UsbPspcmWrite(int endpoint, const u8 *data, u32 size);
 
 typedef struct {
