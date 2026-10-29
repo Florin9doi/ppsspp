@@ -755,56 +755,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 	auto sc = GetI18NCategory(I18NCat::SCREEN);
 
 	switch (virtKey) {
-
-	// hijack some keys :
-	case VIRTKEY_SPEED_CUSTOM1:
-	case VIRTKEY_SPEED_CUSTOM2:
-	case VIRTKEY_FRAME_ADVANCE:
-	case VIRTKEY_REWIND:
-		if (Usbd::getUsbDriver()->recvctl_func != NULL && down) {
-			u32 structSize = sizeof(DeviceRequest);
-			u32 dataBufAddr = userMemory.Alloc(structSize, false, "sceUsb"); // TODO: allocate only once
-			DeviceRequest *req = (DeviceRequest*) Memory::GetPointerOrException(dataBufAddr);
-
-			if (0) {}
-			else if (VIRTKEY_SPEED_CUSTOM1 == virtKey) {
-				// UsbPspcm - p1
-				req->bmRequestType = 0x41;
-				req->bRequest      = 0x07;
-				req->wValue        = 0x0000;
-				req->wIndex        = 0x0000;
-				req->wLength       = 0x0004;
-			}
-			else if (VIRTKEY_SPEED_CUSTOM2 == virtKey) {
-				// UsbPspcm - p2
-				req->bmRequestType = 0xC1;
-				req->bRequest      = 0x08;
-				req->wValue        = 0x0000;
-				req->wIndex        = 0x0000;
-				req->wLength       = 0x0004;
-			}
-			else if (VIRTKEY_FRAME_ADVANCE == virtKey) {
-				// UsbPspcm - p3
-				req->bmRequestType = 0xC1;
-				req->bRequest      = 0x01;
-				req->wValue        = 0x0000;
-				req->wIndex        = 0x0000;
-				req->wLength       = 0x0040;
-			}
-			else if (VIRTKEY_REWIND == virtKey) {
-				// UsbPspcm - p4
-				req->bmRequestType = 0x41;
-				req->bRequest      = 0x02;
-				req->wValue        = 0x0000;
-				req->wIndex        = 0x0000;
-				req->wLength       = 0x000c;
-			}
-
-			u32 args[3] = { 0x00, 0x22, dataBufAddr };
-			hleEnqueueCall(Usbd::getUsbDriver()->recvctl_func, 3, args);
-		}
-		return;
-
 	case VIRTKEY_PAUSE:
 		// Note: We don't check NetworkWarnUserIfOnlineAndCantSpeed, because we can keep
 		// running in the background of the menu.
@@ -990,7 +940,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 		}
 		break;
 
-	/*
 	case VIRTKEY_REWIND:
 		if (down) {
 			if (!Achievements::WarnUserIfHardcoreModeActive(false) && !NetworkWarnUserIfOnlineAndCantSavestate() && !bootPending_) {
@@ -1002,7 +951,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 			}
 		}
 		break;
-	*/
 
 	case VIRTKEY_PAUSE_NO_MENU:
 		if (down) {
@@ -1038,7 +986,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 		}
 		break;
 
-	/*
 	case VIRTKEY_FRAME_ADVANCE:
 		if (down) {
 			// Can't do this reliably in an async fashion, so we just set a variable.
@@ -1053,7 +1000,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 			}
 		}
 		break;
-	*/
 
 	case VIRTKEY_SPEED_TOGGLE:
 		if (down) {
@@ -1154,7 +1100,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 		}
 		break;
 
-	/*
 	case VIRTKEY_SPEED_CUSTOM1:
 		if (down && !NetworkWarnUserIfOnlineAndCantSpeed()) {
 			if (PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL) {
@@ -1181,7 +1126,6 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 			}
 		}
 		break;
-	*/
 
 	case VIRTKEY_RAPID_FIRE:
 		__CtrlSetRapidFire(down, g_Config.iRapidFireInterval);
