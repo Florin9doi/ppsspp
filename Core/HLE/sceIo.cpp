@@ -219,6 +219,8 @@ public:
 		if (handle != -1)
 			pspFileSystem.CloseFile(handle);
 		pgd_close(pgdInfo);
+		if (drvFileArg != 0)
+			kernelMemory.Free(drvFileArg);
 	}
 	const char *GetName() override { return fullpath.c_str(); }
 	const char *GetTypeName() override { return GetStaticTypeName(); }
@@ -246,7 +248,7 @@ public:
 	}
 
 	void DoState(PointerWrap &p) override {
-		auto s = p.Section("FileNode", 1, 4);
+		auto s = p.Section("FileNode", 1, 5);
 		if (!s)
 			return;
 
@@ -302,6 +304,11 @@ public:
 		if (s >= 4) {
 			Do(p, isPspCm);
 		}
+		if (s >= 5) {
+			Do(p, drvFileArg);
+		} else {
+			drvFileArg = 0;
+		}
 		Do(p, pausedWaits);
 	}
 
@@ -335,6 +342,8 @@ public:
 
 	bool isTTY = false;
 	bool isPspCm = false;
+	// The PspIoDrvFileArg (guest memory) the registered driver of "usbpspcm0:" gets in its calls.
+	u32 drvFileArg = 0;
 };
 
 /******************************************************************************/
@@ -666,11 +675,138 @@ void __IoVblank() {
 	lastMemStickFatState = newFatState;
 }
 
+// The IO driver usbpspcm.prx registers with sceIoAddDrv (from its usb driver's start_func). Opens, reads,
+// writes and closes of "usbpspcm0:" are calls of the driver's functions, which talk to the bus through
+// sceUsbbdReqSend / sceUsbbdReqRecv.
+typedef struct {
+	u32 name;
+	u32 dev_type;
+	u32 unk2;
+	u32 description;
+	u32 funcs;
+} IoDrv;
+
+// Indexes in the table of functions the driver points to (PspIoDrvFuncs).
+enum IoDrvFunc {
+	IODRV_INIT = 0,
+	IODRV_EXIT = 1,
+	IODRV_OPEN = 2,
+	IODRV_CLOSE = 3,
+	IODRV_READ = 4,
+	IODRV_WRITE = 5,
+};
+
+static const char *const IODRV_USBPSPCM_NAME = "usbpspcm";
+// What is kept in guest memory for the driver: PspIoDrvArg { drv, arg } at 0, then the (empty) path
+// the driver gets in open.
+static const u32 IODRV_ARG_BLOCK_SIZE = 0x20;
+static const u32 IODRV_PATH_OFFSET = 0x10;
+// PspIoDrvFileArg { unk1, fs_num, drv (PspIoDrvArg *), unk2, arg }.
+static const u32 IODRV_FILE_ARG_SIZE = 0x20;
+
+static IoDrv gIoDrv;
+static u32 gIoDrvAddr = 0;      // the PspIoDrv in guest memory
+static u32 gIoDrvArgAddr = 0;   // the block above
+static bool gIoDrvIsPspCm = false;
+
+static bool IoDrvReady() {
+	return gIoDrvIsPspCm && gIoDrvArgAddr != 0 && gIoDrv.funcs != 0 && Memory::IsValidAddress(gIoDrv.funcs + 4 * IODRV_WRITE);
+}
+
+static u32 IoDrvFunction(IoDrvFunc index) {
+	if (!IoDrvReady()) {
+		return 0;
+	}
+	return Memory::ReadUnchecked_U32(gIoDrv.funcs + 4 * (u32)index);
+}
+
+enum class IoDrvCallKind {
+	// The result of the driver is the result of the syscall.
+	RESULT,
+	// A new fd: the driver's error is the result and the fd is released, or the fd is.
+	OPEN,
+	// The fd is released whatever the driver says.
+	CLOSE,
+};
+
+class IoDrvCallAction : public PSPAction {
+public:
+	IoDrvCallAction() {}
+	static PSPAction *Create() { return new IoDrvCallAction(); }
+	void Set(IoDrvCallKind kind, int fd) { kind_ = kind; fd_ = fd; }
+	void DoState(PointerWrap &p) override {
+		auto s = p.Section("IoDrvCallAction", 1);
+		if (!s)
+			return;
+		Do(p, kind_);
+		Do(p, fd_);
+	}
+	void run(MipsCall &call) override;
+
+private:
+	IoDrvCallKind kind_ = IoDrvCallKind::RESULT;
+	int fd_ = -1;
+};
+
+static int actionIoDrvCall = -1;
+
+void IoDrvCallAction::run(MipsCall &call) {
+	const s32 driverResult = (s32)currentMIPS->r[MIPS_REG_V0];
+	u32 error = 0;
+	switch (kind_) {
+	case IoDrvCallKind::RESULT:
+		call.setReturnValue(driverResult);
+		break;
+	case IoDrvCallKind::OPEN:
+		if (driverResult < 0) {
+			ERROR_LOG(Log::sceIo, "usbpspcm0: the driver refused to open: %08x", driverResult);
+			__IoFreeFd(fd_, error);
+			call.setReturnValue(driverResult);
+		} else {
+			call.setReturnValue(fd_);
+		}
+		break;
+	case IoDrvCallKind::CLOSE:
+		__IoFreeFd(fd_, error);
+		call.setReturnValue(driverResult < 0 ? driverResult : (int)error);
+		break;
+	}
+}
+
+// Runs a function of the driver on the calling thread once the syscall returns. The result of the
+// syscall is then set from what the driver returned (see IoDrvCallAction).
+static void IoDrvCall(IoDrvFunc index, int argc, const u32 *args, IoDrvCallKind kind, int fd) {
+	IoDrvCallAction *action = (IoDrvCallAction *)__KernelCreateAction(actionIoDrvCall);
+	action->Set(kind, fd);
+	hleEnqueueCall(IoDrvFunction(index), argc, args, action);
+}
+
+// Gives a file the argument block its driver calls take. False if there is no memory for it.
+static bool IoDrvPrepareFile(FileNode *f) {
+	u32 size = IODRV_FILE_ARG_SIZE;
+	u32 addr = kernelMemory.Alloc(size, false, "usbpspcm file arg");
+	if (addr == (u32)-1 || addr == 0) {
+		return false;
+	}
+	Memory::Memset(addr, 0, IODRV_FILE_ARG_SIZE, "UsbPspcmFileArg");
+	Memory::WriteUnchecked_U32(0, addr + 0);              // unk1
+	Memory::WriteUnchecked_U32(0, addr + 4);              // fs_num: "usbpspcm0:" is unit 0
+	Memory::WriteUnchecked_U32(gIoDrvArgAddr, addr + 8);  // drv
+	f->drvFileArg = addr;
+	return true;
+}
+
 void __IoInit() {
 	asyncNotifyEvent = CoreTiming::RegisterEvent("IoAsyncNotify", __IoAsyncNotify);
 	syncNotifyEvent = CoreTiming::RegisterEvent("IoSyncNotify", __IoSyncNotify);
 
 	__KernelListenThreadEnd(&TellFsThreadEnded);
+
+	actionIoDrvCall = __KernelRegisterActionType(IoDrvCallAction::Create);
+	gIoDrvIsPspCm = false;
+	gIoDrvAddr = 0;
+	gIoDrvArgAddr = 0;
+	memset(&gIoDrv, 0, sizeof(gIoDrv));
 
 	memset(fds, 0, sizeof(fds));
 
@@ -715,7 +851,7 @@ void __IoShutdown() {
 }
 
 void __IoDoState(PointerWrap &p) {
-	auto s = p.Section("sceIo", 1, 5);
+	auto s = p.Section("sceIo", 1, 6);
 	if (!s)
 		return;
 
@@ -783,6 +919,20 @@ void __IoDoState(PointerWrap &p) {
 	} else {
 		asyncDefaultPriority = -1;
 	}
+
+	if (s >= 6) {
+		Do(p, gIoDrvIsPspCm);
+		Do(p, gIoDrvAddr);
+		Do(p, gIoDrvArgAddr);
+		p.DoVoid(&gIoDrv, (int)sizeof(gIoDrv));
+		Do(p, actionIoDrvCall);
+	} else {
+		gIoDrvIsPspCm = false;
+		gIoDrvAddr = 0;
+		gIoDrvArgAddr = 0;
+		memset(&gIoDrv, 0, sizeof(gIoDrv));
+	}
+	__KernelRestoreActionType(actionIoDrvCall, IoDrvCallAction::Create);
 }
 
 static std::string IODetermineFilename(const FileNode *f) {
@@ -1206,6 +1356,19 @@ static u32 sceIoRead(int id, u32 data_addr, int size) {
 		}
 	}
 
+	if (f->isPspCm && f->drvFileArg != 0 && IoDrvReady()) {
+		if (!(f->openMode & FILEACCESS_READ)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_BADF, "not opened for reading");
+		}
+		if (size < 0) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "negative size");
+		}
+		// The driver fills the buffer, and what it returns is what the app gets.
+		u32 args[] = { f->drvFileArg, data_addr, (u32)size };
+		IoDrvCall(IODRV_READ, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id);
+		return hleLogDebug(Log::sceIo, 0, "read by the driver");
+	}
+
 	int result;
 	int us;
 	bool complete = __IoRead(result, id, data_addr, size, us);
@@ -1352,6 +1515,19 @@ static u32 sceIoWrite(int id, u32 data_addr, int size) {
 		if (__IsInInterrupt()) {
 			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ILLEGAL_CONTEXT, "inside interrupt");
 		}
+	}
+
+	if (f && f->isPspCm && f->drvFileArg != 0 && IoDrvReady()) {
+		if (!(f->openMode & FILEACCESS_WRITE)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_BADF, "not opened for writing");
+		}
+		if (size < 0) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "negative size");
+		}
+		// The driver frames the data and sends it through sceUsbbdReqSend.
+		u32 args[] = { f->drvFileArg, data_addr, (u32)size };
+		IoDrvCall(IODRV_WRITE, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id);
+		return hleLogDebug(Log::sceIo, 0, "written by the driver");
 	}
 
 	int result;
@@ -1718,6 +1894,17 @@ static u32 sceIoOpen(const char *filename, int flags, int mode) {
 		return hleDelayResult(hleLogError(Log::sceIo, id, "out of fds"), "file opened", 1000);
 	} else {
 		asyncParams[id].priority = asyncDefaultPriority;
+		if (f->isPspCm && IoDrvReady()) {
+			if (!IoDrvPrepareFile(f)) {
+				u32 freeError;
+				__IoFreeFd(id, freeError);
+				return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_NO_MEMORY, "no memory for the driver's file");
+			}
+			// The driver gets what follows the name of the device, nothing here, and decides if it opens.
+			u32 args[] = { f->drvFileArg, gIoDrvArgAddr + IODRV_PATH_OFFSET, (u32)flags, (u32)mode };
+			IoDrvCall(IODRV_OPEN, ARRAY_SIZE(args), args, IoDrvCallKind::OPEN, id);
+			return hleLogDebug(Log::sceIo, id, "opened by the driver");
+		}
 		IFileSystem *sys = pspFileSystem.GetSystemFromFilename(filename);
 		if (sys && !f->isTTY && !f->isPspCm && (sys->DevType(f->handle) & (PSPDevType::BLOCK | PSPDevType::EMU_LBN))) {
 			// These are fast to open, no delay or even rescheduling happens.
@@ -1735,6 +1922,12 @@ static u32 sceIoClose(int id) {
 	u32 error;
 	// Closing the memory stick's raw device doesn't reschedule (pspautotests io/msstor/msstor).
 	FileNode *f = __IoGetFd(id, error);
+	if (f && f->isPspCm && f->drvFileArg != 0 && IoDrvReady()) {
+		// The driver closes first, the fd goes once it returned.
+		u32 args[] = { f->drvFileArg };
+		IoDrvCall(IODRV_CLOSE, ARRAY_SIZE(args), args, IoDrvCallKind::CLOSE, id);
+		return hleLogDebug(Log::sceIo, 0, "closed by the driver");
+	}
 	const bool rawMemstick = f && startsWithNoCase(f->fullpath, "msstor");
 	__IoFreeFd(id, error);
 	if (rawMemstick) {
@@ -2644,32 +2837,57 @@ private:
 	std::vector<std::string> shortNames_;
 };
 
-typedef struct {
-	u32 name;
-	u32 dev_type;
-	u32 unk2;
-	u32 description;
-	u32 funcs;
-} IoDrv;
-IoDrv gIoDrv;
-
 static int sceIoAddDrv(u32 drvAddr) {
-	ERROR_LOG(Log::sceIo, "sceIoAddDrv");
 	auto ioDrv = PSPPointer<IoDrv>::Create(drvAddr);
-	if (ioDrv.IsValid()) {
-		ioDrv.NotifyRead("sceIoAddDrv");
-		gIoDrv = *ioDrv;
+	if (!ioDrv.IsValid()) {
+		return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad driver pointer");
 	}
-	ERROR_LOG(Log::sceIo, "    name = %s", Memory::GetCharPointer(gIoDrv.name));
-	ERROR_LOG(Log::sceIo, "    dev_type = %08x", gIoDrv.dev_type);
-	ERROR_LOG(Log::sceIo, "    unk2 = %08x", gIoDrv.unk2);
-	ERROR_LOG(Log::sceIo, "    description = %s", Memory::GetCharPointer(gIoDrv.description));
-	ERROR_LOG(Log::sceIo, "    funcs = %08x", gIoDrv.funcs);
-	return 0;
+	ioDrv.NotifyRead("sceIoAddDrv");
+	const IoDrv drv = *ioDrv;
+	const char *name = Memory::IsValidAddress(drv.name) ? Memory::GetCharPointer(drv.name) : "";
+	INFO_LOG(Log::sceIo, "sceIoAddDrv(%08x): name = %s, dev_type = %08x, unk2 = %08x, funcs = %08x", drvAddr, name, drv.dev_type, drv.unk2, drv.funcs);
+
+	// Only the one of usbpspcm.prx is used for now.
+	if (strcmp(name, IODRV_USBPSPCM_NAME) != 0 || !Memory::IsValidAddress(drv.funcs + 4 * IODRV_WRITE)) {
+		WARN_LOG(Log::sceIo, "sceIoAddDrv: ignoring driver %s", name);
+		return 0;
+	}
+
+	if (gIoDrvArgAddr == 0) {
+		u32 size = IODRV_ARG_BLOCK_SIZE;
+		u32 addr = kernelMemory.Alloc(size, false, "usbpspcm io driver");
+		if (addr == (u32)-1 || addr == 0) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_NO_MEMORY, "no memory for the driver");
+		}
+		Memory::Memset(addr, 0, IODRV_ARG_BLOCK_SIZE, "UsbPspcmDrvArg");
+		gIoDrvArgAddr = addr;
+	}
+	gIoDrv = drv;
+	gIoDrvAddr = drvAddr;
+	gIoDrvIsPspCm = true;
+	Memory::WriteUnchecked_U32(drvAddr, gIoDrvArgAddr + 0); // PspIoDrvArg.drv
+	Memory::WriteUnchecked_U32(0, gIoDrvArgAddr + 4);       // PspIoDrvArg.arg: the driver's own
+	Memory::WriteUnchecked_U8(0, gIoDrvArgAddr + IODRV_PATH_OFFSET);
+
+	// The init function of the driver (the PspIoDrvArg is its argument). The result of sceIoAddDrv stays 0.
+	const u32 initFunc = IoDrvFunction(IODRV_INIT);
+	if (initFunc != 0) {
+		u32 args[] = { gIoDrvArgAddr };
+		hleEnqueueCall(initFunc, ARRAY_SIZE(args), args);
+	}
+	return hleLogInfo(Log::sceIo, 0);
 }
 
-static int sceIoDelDrv(const char* name) {
-	ERROR_LOG(Log::sceIo, "sceIoDelDrv(%s)", name);
+static int sceIoDelDrv(const char *name) {
+	INFO_LOG(Log::sceIo, "sceIoDelDrv(%s)", name ? name : "(null)");
+	if (name && strcmp(name, IODRV_USBPSPCM_NAME) == 0 && gIoDrvIsPspCm) {
+		const u32 exitFunc = IoDrvFunction(IODRV_EXIT);
+		gIoDrvIsPspCm = false;
+		if (exitFunc != 0) {
+			u32 args[] = { gIoDrvArgAddr };
+			hleEnqueueCall(exitFunc, ARRAY_SIZE(args), args);
+		}
+	}
 	return 0;
 }
 
