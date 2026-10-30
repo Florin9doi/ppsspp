@@ -710,7 +710,7 @@ static void UsbStartRegisteredThread() {
 void __UsbRegisterThread(int threadId) {
 	usbRegisteredThread = threadId;
 	usbRegisteredThreadStarted = false;
-	UsbStartRegisteredThread();
+	//UsbStartRegisteredThread();
 }
 
 void __UsbUnregisterThread(int threadId) {
@@ -869,7 +869,7 @@ static int sceUsbActivate(u32 pid) {
 	}
 
 	UsbUpdateState();
-	UsbStartRegisteredThread();
+	//UsbStartRegisteredThread();
 
 	return hleLogDebug(Log::HLE, 0);
 }
@@ -1030,6 +1030,8 @@ static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 	if (!req.IsValid() || !Memory::IsValidRange(usbDeviceReqAddr, sizeof(UsbEndpoint))) {
 		return hleLogError(Log::HLE, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad request");
 	}
+
+	UsbStartRegisteredThread();
 	req.NotifyRead("sceUsbbdReqRecv");
 
 	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: endpointPtr=0x%02x", req->endpointPtr);
