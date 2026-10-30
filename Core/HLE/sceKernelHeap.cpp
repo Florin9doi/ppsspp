@@ -58,6 +58,40 @@ static int sceKernelCreateHeap(int partitionId, int size, int flags, const char 
 	// Only partitions 1-6 exist, and anything else is ILLEGAL_PARTITION rather than the
 	// ILLEGAL_ARGUMENT this used to return. Note the test can't cover partition 5: creating a
 	// heap in the volatile partition takes a real PSP down hard enough to need a reboot.
+
+	if (strcmp(Name, "SceUsbPspcmUnit") == 0) {
+		/*
+		TODO:
+		before:
+		HLE\sceKernelHeap.cpp:94 K 401=sceKernelCreateHeap(1, 8908, 00000001, SceUsbPspcmUnit)
+		HLE\sceKernelHeap.cpp:115 K 08027800=sceKernelAllocHeapMemory(401, 244)
+		HLE\sceKernelHeap.cpp:199 K 134371264=sceKernelAllocHeapMemoryWithOption(401, 00002000, 09ffd4b0[00000008])
+		HLE\sceKernelHeap.cpp:199 K 134371008=sceKernelAllocHeapMemoryWithOption(401, 000000c0, 09ffd4b0[00000008])
+		HLE\sceKernelHeap.cpp:115 K 080256a0=sceKernelAllocHeapMemory(401, 24)
+		Util\BlockAllocator.cpp:400 -----------
+		Util\BlockAllocator.cpp:404 Block: 08025680 - 080256a0 size 00000020 taken=0 tag=(untitled)
+		Util\BlockAllocator.cpp:404 Block: 080256a0 - 080256c0 size 00000020 taken=1 tag=---
+		Util\BlockAllocator.cpp:404 Block: 080256c0 - 080257c0 size 00000100 taken=1 tag=---
+		Util\BlockAllocator.cpp:404 Block: 080257c0 - 08027800 size 00002040 taken=1 tag=---
+		Util\BlockAllocator.cpp:404 Block: 08027800 - 08027900 size 00000100 taken=1 tag=---
+		Util\BlockAllocator.cpp:406 -----------
+		Util\BlockAllocator.cpp:138 Block Allocator (08025680-08027900) failed to allocate 256 (00000100) bytes of contiguous memory
+		HLE\sceKernelHeap.cpp:113 K 00000000=sceKernelAllocHeapMemory(401, 244): failed to allocate 244 bytes
+
+		after:
+		HLE\sceKernelHeap.cpp:115 K 381=sceKernelCreateHeap(1, 8908, 00000001, SceUsbPspcmUnit)
+		HLE\sceKernelHeap.cpp:136 K 0802e000=sceKernelAllocHeapMemory(381, 244)
+		HLE\sceKernelHeap.cpp:220 K 0802bfc0=sceKernelAllocHeapMemoryWithOption(381, 8192, 09fffb80[00000008])
+		HLE\sceKernelHeap.cpp:220 K 0802bec0=sceKernelAllocHeapMemoryWithOption(381, 192, 09fffb80[00000008])
+		HLE\sceKernelHeap.cpp:136 K 0802bea0=sceKernelAllocHeapMemory(381, 24)
+		HLE\sceKernelHeap.cpp:136 K 0802bda0=sceKernelAllocHeapMemory(381, 244)
+		HLE\sceKernelHeap.cpp:220 K 08029d40=sceKernelAllocHeapMemoryWithOption(381, 8192, 09fffb80[00000008])
+		HLE\sceKernelHeap.cpp:220 K 08029c40=sceKernelAllocHeapMemoryWithOption(381, 192, 09fffb80[00000008])
+		HLE\sceKernelHeap.cpp:136 K 0802bd80=sceKernelAllocHeapMemory(381, 24)
+		*/
+		size *= 2;
+	}
+
 	if (partitionId < 1 || partitionId > 6)
 		return hleLogWarning(Log::sceKernel, SCE_KERNEL_ERROR_ILLEGAL_PARTITION, "invalid partition %d", partitionId);
 
@@ -264,7 +298,7 @@ const HLEFunction SysMemForKernel[] = {
 	{ 0X3FC9AE6A, &WrapU_V<sceKernelDevkitVersion>,                "sceKernelDevkitVersion",             'x', "" ,     HLE_KERNEL_SYSCALL },
 	{ 0X536AD5E1, &WrapU_V<sceKernelGetUidmanCB>,                  "sceKernelGetUidmanCB",               'i', "i" ,    HLE_KERNEL_SYSCALL },
 	{ 0X7B749390, &WrapI_IU<sceKernelFreeHeapMemory>,              "sceKernelFreeHeapMemory",            'i', "ix" ,   HLE_KERNEL_SYSCALL },
-	{ 0XEB7A74DB, &WrapI_IUU<sceKernelAllocHeapMemoryWithOption>,  "sceKernelAllocHeapMemoryWithOption", 'i', "ixp" ,  HLE_KERNEL_SYSCALL },
+	{ 0XEB7A74DB, &WrapI_IUU<sceKernelAllocHeapMemoryWithOption>,  "sceKernelAllocHeapMemoryWithOption", 'x', "iip" ,  HLE_KERNEL_SYSCALL },
 	{ 0x6373995d, &WrapI_V<sceKernelGetModel>,                     "sceKernelGetModel",                  'i', "",      HLE_KERNEL_SYSCALL},  // 220
 	{ 0x07C586A1, &WrapI_V<sceKernelGetModel>,                     "sceKernelGetModel",                  'i', "",      HLE_KERNEL_SYSCALL },  // 220
 	// The 5.xx NID for the same call.
@@ -291,7 +325,7 @@ const HLEFunction SysMemForKernel[] = {
 	{ 0xf5780daa, nullptr,                                         "sceKernelUnk6",                      '?', ""   },
 	{ 0x58148f07, &WrapI_IIIC<sceKernelCreateHeap>,                "sceKernelCreateHeap",                'i', "iixs",  HLE_KERNEL_SYSCALL },
 	{ 0x23d81675, &WrapI_II<sceKernelAllocHeapMemory>,             "sceKernelAllocHeapMemory",           'x', "ii",    HLE_KERNEL_SYSCALL },
-	{ 0xf2284ecc, &WrapI_IUU<sceKernelAllocHeapMemoryWithOption>,  "sceKernelAllocHeapMemoryWithOption", 'i', "ixp" ,  HLE_KERNEL_SYSCALL },
+	{ 0xf2284ecc, &WrapI_IUU<sceKernelAllocHeapMemoryWithOption>,  "sceKernelAllocHeapMemoryWithOption", 'x', "iip" ,  HLE_KERNEL_SYSCALL },
 	{ 0xdd6512d0, &WrapI_I<sceKernelDeleteHeap>,                   "sceKernelDeleteHeap",                'i', "i" ,    HLE_KERNEL_SYSCALL },
 	{ 0x87c2ab85, &WrapI_IU<sceKernelFreeHeapMemory>,              "sceKernelFreeHeapMemory",            'i', "ix" ,   HLE_KERNEL_SYSCALL },
 };
