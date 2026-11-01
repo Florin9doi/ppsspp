@@ -106,20 +106,15 @@ public:
 			u8 totalLen;
 			u8 endpoint;
 			union {
-				u8 usb_data[usb_max];
 				struct {
-					union {
-						u8 req_data[8];
-						struct { // DeviceRequest
-							u8 bmRequestType;
-							u8 bRequest;
-							u16 wValue;
-							u16 wIndex;
-							u16 wLength;
-						};
-					} req;
+					u8 bmRequestType;
+					u8 bRequest;
+					u16 wValue;
+					u16 wIndex;
+					u16 wLength;
 					u8 data[data_max];
-				};
+				} ctrl;
+				u8 bulk_data[usb_max];
 			};
 		};
 	};
@@ -158,16 +153,16 @@ public:
 		}
 
 		if (endpoint == 0 && size >= 12) {
-			req.bmRequestType = read8(ptr, size, &offset);
-			req.bRequest = read8(ptr, size, &offset);
-			req.wValue = read16(ptr, size, &offset);
-			req.wIndex = read16(ptr, size, &offset);
-			req.wLength = read16(ptr, size, &offset);
+			ctrl.bmRequestType = read8(ptr, size, &offset);
+			ctrl.bRequest = read8(ptr, size, &offset);
+			ctrl.wValue = read16(ptr, size, &offset);
+			ctrl.wIndex = read16(ptr, size, &offset);
+			ctrl.wLength = read16(ptr, size, &offset);
 			// Only a host to device request carries data, wLength of a device to host request is
 			// the size of the buffer it expects back.
-			if (req.wLength && (req.bmRequestType & 0x80) == 0) {
-				if (req.wLength <= data_max && offset + req.wLength <= size) {
-					memcpy(data, ptr + offset, req.wLength);
+			if (ctrl.wLength && (ctrl.bmRequestType & 0x80) == 0) {
+				if (ctrl.wLength <= data_max && offset + ctrl.wLength <= size) {
+					memcpy(ctrl.data, ptr + offset, ctrl.wLength);
 				}
 				else {
 					return 0;
@@ -178,7 +173,7 @@ public:
 			if (totalLen < 4 || totalLen - 4 > usb_max || size < totalLen) {
 				return 0;
 			}
-			memcpy(usb_data, ptr + offset, totalLen - 4);
+			memcpy(bulk_data, ptr + offset, totalLen - 4);
 		}
 		return getPkLen();
 	}
@@ -339,7 +334,8 @@ void PspCmManager::Thread() {
 				continue;
 			}
 
-			ERROR_LOG(Log::HLE, "pspcm_manager:   >> received: %d [%s]", recvLen, HexDump(recvbuf, recvLen).c_str());
+			if (recvbuf[3] == 0 || recvbuf[3] == 2) // ep==0 || ep==2
+				ERROR_LOG(Log::HLE, "pspcm_manager:   >> received: %d [%s]", recvLen, HexDump(recvbuf, recvLen).c_str());
 			stream.insert(stream.end(), recvbuf, recvbuf + recvLen);
 
 			while (TakePacket(stream, packet)) {
@@ -359,7 +355,7 @@ void PspCmManager::Thread() {
 					msg.data.assign(pk.net_data, pk.net_data + pklen);
 				} else {
 					msg.packetType = PspCmPacketType::BULK;
-					msg.data.assign(pk.usb_data, pk.usb_data + (pklen - 4));
+					msg.data.assign(pk.bulk_data, pk.bulk_data + (pklen - 4));
 				}
 				Push(std::move(msg));
 			}
