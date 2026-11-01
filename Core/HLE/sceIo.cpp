@@ -694,13 +694,18 @@ enum IoDrvFunc {
 	IODRV_CLOSE = 3,
 	IODRV_READ = 4,
 	IODRV_WRITE = 5,
+	IODRV_IOCTL = 7,
+	IODRV_DEVCTL = 20,
 };
 
 static const char *const IODRV_USBPSPCM_NAME = "usbpspcm";
 // What is kept in guest memory for the driver: PspIoDrvArg { drv, arg } at 0, then the (empty) path
 // the driver gets in open.
-static const u32 IODRV_ARG_BLOCK_SIZE = 0x20;
+static const u32 IODRV_ARG_BLOCK_SIZE = 0x60;
 static const u32 IODRV_PATH_OFFSET = 0x10;
+// For the calls that come without a file (devctl): a PspIoDrvFileArg of its own, and the name of the device.
+static const u32 IODRV_DEVCTL_ARG_OFFSET = 0x20;
+static const u32 IODRV_DEVNAME_OFFSET = 0x40;
 // PspIoDrvFileArg { unk1, fs_num, drv (PspIoDrvArg *), unk2, arg }.
 static const u32 IODRV_FILE_ARG_SIZE = 0x20;
 
@@ -753,6 +758,13 @@ static int actionIoDrvCall = -1;
 void IoDrvCallAction::run(MipsCall &call) {
 	const s32 driverResult = (s32)currentMIPS->r[MIPS_REG_V0];
 	u32 error = 0;
+	// A driver that answers with an error at once (not connected yet, say) makes the app ask again
+	// and again, so this says it only when the result changes.
+	static s32 lastLoggedResult = 0;
+	if (driverResult != lastLoggedResult) {
+		INFO_LOG(Log::sceIo, "usbpspcm0: driver call (kind %d, fd %d) returned %08x", (int)kind_, fd_, (u32)driverResult);
+		lastLoggedResult = driverResult;
+	}
 	switch (kind_) {
 	case IoDrvCallKind::RESULT:
 		call.setReturnValue(driverResult);
@@ -775,10 +787,17 @@ void IoDrvCallAction::run(MipsCall &call) {
 
 // Runs a function of the driver on the calling thread once the syscall returns. The result of the
 // syscall is then set from what the driver returned (see IoDrvCallAction).
-static void IoDrvCall(IoDrvFunc index, int argc, const u32 *args, IoDrvCallKind kind, int fd) {
+static bool IoDrvCall(IoDrvFunc index, int argc, const u32 *args, IoDrvCallKind kind, int fd) {
+	const u32 func = IoDrvFunction(index);
+	if (func == 0 || !Memory::IsValidAddress(func)) {
+		// Calling it would jump to nowhere.
+		ERROR_LOG(Log::sceIo, "usbpspcm: the driver has no function %d (%08x)", (int)index, func);
+		return false;
+	}
 	IoDrvCallAction *action = (IoDrvCallAction *)__KernelCreateAction(actionIoDrvCall);
 	action->Set(kind, fd);
-	hleEnqueueCall(IoDrvFunction(index), argc, args, action);
+	hleEnqueueCall(func, argc, args, action);
+	return true;
 }
 
 // Gives a file the argument block its driver calls take. False if there is no memory for it.
@@ -1282,6 +1301,10 @@ static bool __IoRead(int &result, int id, u32 data_addr, int size, int &us) {
 		if (!(f->openMode & FILEACCESS_READ)) {
 			result = SCE_KERNEL_ERROR_BADF;
 			return true;
+		} else if (f->isPspCm) {
+			// Only the driver reads from the device (sceIoRead calls it): not through the async path.
+			result = SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED;
+			return true;
 		} else if (size < 0) {
 			result = SCE_KERNEL_ERROR_ILLEGAL_ADDR;
 			return true;
@@ -1365,7 +1388,9 @@ static u32 sceIoRead(int id, u32 data_addr, int size) {
 		}
 		// The driver fills the buffer, and what it returns is what the app gets.
 		u32 args[] = { f->drvFileArg, data_addr, (u32)size };
-		IoDrvCall(IODRV_READ, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id);
+		if (!IoDrvCall(IODRV_READ, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver has no such function");
+		}
 		return hleLogDebug(Log::sceIo, 0, "read by the driver");
 	}
 
@@ -1468,9 +1493,8 @@ static bool __IoWrite(int &result, int id, u32 data_addr, int size, int &us) {
 			return true;
 		}
 		if (f->isPspCm) {
-			// Where the writes go: 1 is the bulk IN endpoint (0x81), 3 the interrupt IN one (0x83).
-			static const int pspcmWriteEndpoint = 3;
-			result = __UsbPspcmWrite(pspcmWriteEndpoint, (const u8 *)data_ptr, validSize);
+			// Only the driver writes to the device (sceIoWrite calls it): not through the async path.
+			result = SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED;
 			return true;
 		}
 
@@ -1526,7 +1550,9 @@ static u32 sceIoWrite(int id, u32 data_addr, int size) {
 		}
 		// The driver frames the data and sends it through sceUsbbdReqSend.
 		u32 args[] = { f->drvFileArg, data_addr, (u32)size };
-		IoDrvCall(IODRV_WRITE, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id);
+		if (!IoDrvCall(IODRV_WRITE, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver has no such function");
+		}
 		return hleLogDebug(Log::sceIo, 0, "written by the driver");
 	}
 
@@ -1821,6 +1847,11 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 
 		isTTY = true;
 	} else if (startsWithNoCase(filename, "usbpspcm0:")) {
+		// There is nothing behind it until usbpspcm.prx registers its driver (sceIoAddDrv).
+		if (!IoDrvReady()) {
+			error = SCE_KERNEL_ERROR_NODEV;
+			return nullptr;
+		}
 		info.name = filename;
 		info.access = 0777;
 		info.exists = true;
@@ -1902,7 +1933,11 @@ static u32 sceIoOpen(const char *filename, int flags, int mode) {
 			}
 			// The driver gets what follows the name of the device, nothing here, and decides if it opens.
 			u32 args[] = { f->drvFileArg, gIoDrvArgAddr + IODRV_PATH_OFFSET, (u32)flags, (u32)mode };
-			IoDrvCall(IODRV_OPEN, ARRAY_SIZE(args), args, IoDrvCallKind::OPEN, id);
+			if (!IoDrvCall(IODRV_OPEN, ARRAY_SIZE(args), args, IoDrvCallKind::OPEN, id)) {
+				u32 freeError;
+				__IoFreeFd(id, freeError);
+				return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver can't open");
+			}
 			return hleLogDebug(Log::sceIo, id, "opened by the driver");
 		}
 		IFileSystem *sys = pspFileSystem.GetSystemFromFilename(filename);
@@ -1925,7 +1960,9 @@ static u32 sceIoClose(int id) {
 	if (f && f->isPspCm && f->drvFileArg != 0 && IoDrvReady()) {
 		// The driver closes first, the fd goes once it returned.
 		u32 args[] = { f->drvFileArg };
-		IoDrvCall(IODRV_CLOSE, ARRAY_SIZE(args), args, IoDrvCallKind::CLOSE, id);
+		if (!IoDrvCall(IODRV_CLOSE, ARRAY_SIZE(args), args, IoDrvCallKind::CLOSE, id)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver has no such function");
+		}
 		return hleLogDebug(Log::sceIo, 0, "closed by the driver");
 	}
 	const bool rawMemstick = f && startsWithNoCase(f->fullpath, "msstor");
@@ -2357,33 +2394,18 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 	}
 
 	if (!strcmp(name, "usbpspcm:")) {
-		switch (cmd) {
-		case 0x03415001: // register USB thread
-			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
-				u32 threadID = Memory::ReadOrException_U32(argAddr);
-				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : register USB : threadID = 0x%08x/%d", threadID, threadID);
-				__UsbRegisterThread(threadID);
-				return 0;
-			}
-			break;
-		case 0x03415002: // unregister USB thread
-			if (Memory::IsValidAddress(argAddr) && argLen >= 4) {
-				u32 threadID = Memory::ReadOrException_U32(argAddr);
-				ERROR_LOG(Log::sceIo, "sceIoDevctl : usbpspcm : unregister USB : threadID = 0x%08x/%d", threadID, threadID);
-				__UsbUnregisterThread(threadID);
-				return 0;
-			}
-			break;
-		case 0x03435005: // Bind
-			if (Memory::IsValidRange(outPtr, outLen) && outLen >= 11) {
-				Memory::Memcpy(outPtr, "usbpspcm0:", 11, "UsbPspcmBind");
-				return hleLogDebug(Log::sceIo, 0);
-			}
-			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad output buffer");
-		default:
-			ERROR_LOG(Log::sceIo, "UNIMPL sceIoDevctl(\"%s\", %08x, %08x, %i, %08x, %i)", name, cmd, argAddr, argLen, outPtr, outLen);
-			return 0;
+		// All of it is the driver's: registering the thread, binding, ...
+		if (!IoDrvReady()) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_NODEV, "no driver registered");
 		}
+		u32 args[] = {
+			gIoDrvArgAddr + IODRV_DEVCTL_ARG_OFFSET, gIoDrvArgAddr + IODRV_DEVNAME_OFFSET,
+			(u32)cmd, argAddr, (u32)argLen, outPtr, (u32)outLen,
+		};
+		if (!IoDrvCall(IODRV_DEVCTL, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, -1)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver has no such function");
+		}
+		return hleLogDebug(Log::sceIo, 0, "devctl %08x by the driver", cmd);
 	}
 
 	if (!strcmp(name, "kemulator:") || !strcmp(name, "emulator:")) {
@@ -2868,6 +2890,10 @@ static int sceIoAddDrv(u32 drvAddr) {
 	Memory::WriteUnchecked_U32(drvAddr, gIoDrvArgAddr + 0); // PspIoDrvArg.drv
 	Memory::WriteUnchecked_U32(0, gIoDrvArgAddr + 4);       // PspIoDrvArg.arg: the driver's own
 	Memory::WriteUnchecked_U8(0, gIoDrvArgAddr + IODRV_PATH_OFFSET);
+	Memory::WriteUnchecked_U32(0, gIoDrvArgAddr + IODRV_DEVCTL_ARG_OFFSET + 0);               // unk1
+	Memory::WriteUnchecked_U32(0, gIoDrvArgAddr + IODRV_DEVCTL_ARG_OFFSET + 4);               // fs_num
+	Memory::WriteUnchecked_U32(gIoDrvArgAddr, gIoDrvArgAddr + IODRV_DEVCTL_ARG_OFFSET + 8);   // drv
+	Memory::Memcpy(gIoDrvArgAddr + IODRV_DEVNAME_OFFSET, "usbpspcm:", 10, "UsbPspcmDevName");
 
 	// The init function of the driver (the PspIoDrvArg is its argument). The result of sceIoAddDrv stays 0.
 	const u32 initFunc = IoDrvFunction(IODRV_INIT);
@@ -3322,6 +3348,16 @@ int __IoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, u32 out
 }
 
 u32 sceIoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, u32 outlen) {
+	u32 fdError;
+	FileNode *pspcmFile = __IoGetFd(id, fdError);
+	if (pspcmFile && pspcmFile->isPspCm && pspcmFile->drvFileArg != 0 && IoDrvReady()) {
+		// The driver's: its own commands (0x03416102, ...).
+		u32 args[] = { pspcmFile->drvFileArg, cmd, indataPtr, inlen, outdataPtr, outlen };
+		if (!IoDrvCall(IODRV_IOCTL, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, id)) {
+			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver has no such function");
+		}
+		return hleLogDebug(Log::sceIo, 0, "ioctl %08x by the driver", cmd);
+	}
 	int usec = 0;
 	int result = __IoIoctl(id, cmd, indataPtr, inlen, outdataPtr, outlen, usec);
 	if (usec != 0) {

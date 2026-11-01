@@ -529,27 +529,6 @@ static void UsbLinkHandleStandardRequest(const PspUsbDriver *drv, const std::vec
 	}
 }
 
-int __UsbPspcmWrite(int endpoint, const u8 *data, u32 size) {
-	if (endpoint != 1 && endpoint != 3) {
-		ERROR_LOG(Log::HLE, "pspcm: endpoint %d isn't an IN endpoint (1 bulk, 3 interrupt)", endpoint);
-		return 0;
-	}
-	if (!data || size == 0) {
-		return 0;
-	}
-	auto &queue = usbInQueue[endpoint];
-	if (queue.size() >= USB_IN_QUEUE_MAX) {
-		WARN_LOG(Log::HLE, "pspcm: the queue of endpoint %d is full, dropping the oldest", endpoint);
-		queue.pop_front();
-	}
-	UsbInEntry entry;
-	entry.data.assign(data, data + size);
-	queue.push_back(std::move(entry));
-	// The host may be waiting already.
-	UsbLinkServeIn(endpoint, true);
-	return (int)size;
-}
-
 static void UsbLinkOnConnect() {
 	PspUsbDriver *drv = Usbd::getUsbDriver();
 	if (usbLinkConnected) {
