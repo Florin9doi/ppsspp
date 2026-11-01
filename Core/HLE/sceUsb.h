@@ -23,10 +23,6 @@ void __UsbInit();
 void __UsbDoState(PointerWrap &p);
 void __UsbShutdown();
 
-// The thread usbpspcm.prx registers, started when the USB is activated.
-void __UsbRegisterThread(int threadId);
-void __UsbUnregisterThread(int threadId);
-
 typedef struct {
 	u32 unk1;
 	u32 unk2;

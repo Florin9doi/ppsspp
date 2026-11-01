@@ -93,93 +93,6 @@ static int StartServer() {
 }
 
 
-class DataPk {
-	static const int data_max = 0x40; // wMaxPacketSize
-	static const int usb_max = 8 + data_max; // the 8 bytes of a setup packet, then the data: 0x48
-	static const int net_max = 4 + usb_max; // 0x4c
-
-public:
-	union {
-		u8 net_data[net_max];
-		struct {
-			u16 magic;
-			u8 totalLen;
-			u8 endpoint;
-			union {
-				struct {
-					u8 bmRequestType;
-					u8 bRequest;
-					u16 wValue;
-					u16 wIndex;
-					u16 wLength;
-					u8 data[data_max];
-				} ctrl;
-				u8 bulk_data[usb_max];
-			};
-		};
-	};
-
-	int getPkLen() {
-		return totalLen;
-	}
-
-	int read8(unsigned char* buf, int size, int* offset) {
-		if (*offset < size) {
-			return buf[(*offset)++];
-		}
-		return -1;
-	}
-
-	int read16(unsigned char* buf, int size, int* offset) {
-		if (*offset < size - 1) {
-			int ret = buf[(*offset)++];
-			ret += buf[(*offset)++] << 8;
-			return ret;
-		}
-		return -1;
-	}
-
-public:
-	int read(unsigned char* ptr, int size) {
-		int offset = 0;
-		if (size >= 4) {
-			magic = read16(ptr, size, &offset);
-			if (magic != 0x0ff0) {
-				ERROR_LOG(Log::HLE, "pspcm_manager : magic err %x", magic);
-				return 0;
-			}
-			totalLen = read8(ptr, size, &offset);
-			endpoint = read8(ptr, size, &offset);
-		}
-
-		if (endpoint == 0 && size >= 12) {
-			ctrl.bmRequestType = read8(ptr, size, &offset);
-			ctrl.bRequest = read8(ptr, size, &offset);
-			ctrl.wValue = read16(ptr, size, &offset);
-			ctrl.wIndex = read16(ptr, size, &offset);
-			ctrl.wLength = read16(ptr, size, &offset);
-			// Only a host to device request carries data, wLength of a device to host request is
-			// the size of the buffer it expects back.
-			if (ctrl.wLength && (ctrl.bmRequestType & 0x80) == 0) {
-				if (ctrl.wLength <= data_max && offset + ctrl.wLength <= size) {
-					memcpy(ctrl.data, ptr + offset, ctrl.wLength);
-				}
-				else {
-					return 0;
-				}
-			}
-		}
-		else if (endpoint > 0) {
-			if (totalLen < 4 || totalLen - 4 > usb_max || size < totalLen) {
-				return 0;
-			}
-			memcpy(bulk_data, ptr + offset, totalLen - 4);
-		}
-		return getPkLen();
-	}
-};
-
-
 // Logs at most the first 64 bytes.
 static std::string HexDump(const void *buf, int len) {
 	char arr[3 * 64 + 1] = {};
@@ -196,8 +109,7 @@ void PspCmManager::Send(const char *buf, int len) {
 		return;
 	}
 	int ret = send(client, buf, len, 0);
-	ERROR_LOG(Log::HLE, "pspcm_manager: send >> : %d/%d [%s]", ret, len, HexDump(buf, len).c_str());
-
+	DEBUG_LOG(Log::HLE, "pspcm_manager: send >> : %d/%d [%s]", ret, len, HexDump(buf, len).c_str());
 }
 
 // A transfer to the host, framed like the ones received: magic, length (header included), endpoint.
@@ -237,6 +149,44 @@ static bool TakePacket(std::vector<u8> &stream, std::vector<u8> &packet) {
 		return true;
 	}
 	return false;
+}
+
+// Checks a whole packet and says what it is. Bulk data is left without its header. False if it is malformed.
+// An IN request has a byte of payload (the size of the buffer of the host), which isn't used.
+static bool ParsePacket(std::vector<u8> &packet, PspCmPacketType &type) {
+	static const size_t maxData = 0x40; // wMaxPacketSize
+	static const size_t headerLen = 4;
+	static const size_t ctrlHeaderLen = 12; // the header, then the 8 bytes of the setup packet
+	const u8 endpoint = packet[3];
+
+	if (endpoint & 0x80) {
+		type = PspCmPacketType::IN_REQUEST;
+		return true;
+	}
+	if (endpoint != 0) {
+		type = PspCmPacketType::BULK;
+		if (packet.size() - headerLen > maxData) {
+			return false;
+		}
+		packet.erase(packet.begin(), packet.begin() + headerLen);
+		return true;
+	}
+
+	type = PspCmPacketType::CONTROL;
+	if (packet.size() < ctrlHeaderLen) {
+		return true; // nothing to look at, the receiver ignores it
+	}
+	// Only a host to device request carries data, wLength of a device to host request is the size of
+	// the buffer it expects back.
+	const u8 requestType = packet[4];
+	const size_t length = packet[10] | (packet[11] << 8);
+	if (length != 0 && (requestType & 0x80) == 0) {
+		if (length > maxData || ctrlHeaderLen + length > packet.size()) {
+			return false;
+		}
+		packet.resize(ctrlHeaderLen + length);
+	}
+	return true;
 }
 
 // Closes the connection to the host, if there is one, and tells the CPU thread.
@@ -323,7 +273,7 @@ void PspCmManager::Thread() {
 		}
 
 		if (client >= 0 && FD_ISSET(client, &readSet)) {
-			unsigned char recvbuf[255];
+			unsigned char recvbuf[512];
 			int recvLen = recv(client, (char *)recvbuf, sizeof(recvbuf), 0);
 			if (recvLen <= 0) {
 				ERROR_LOG(Log::HLE, "pspcm_manager: Connection closed (%d)", recvLen);
@@ -334,28 +284,19 @@ void PspCmManager::Thread() {
 				continue;
 			}
 
-			if (recvbuf[3] == 0 || recvbuf[3] == 2) // ep==0 || ep==2
-				ERROR_LOG(Log::HLE, "pspcm_manager:   >> received: %d [%s]", recvLen, HexDump(recvbuf, recvLen).c_str());
+			DEBUG_LOG(Log::HLE, "pspcm_manager:   >> received: %d [%s]", recvLen, HexDump(recvbuf, recvLen).c_str());
 			stream.insert(stream.end(), recvbuf, recvbuf + recvLen);
 
 			while (TakePacket(stream, packet)) {
-				DataPk pk = DataPk();
-				int pklen = pk.read(packet.data(), (int)packet.size());
-				if (pklen == 0 || pklen > (int)sizeof(pk.net_data)) {
-					continue;
-				}
-
 				Msg msg;
 				msg.type = MsgType::PACKET;
-				msg.endpoint = pk.endpoint;
-				if (pk.endpoint & 0x80) {
-					msg.packetType = PspCmPacketType::IN_REQUEST;
-				} else if (pk.endpoint == 0) {
-					msg.packetType = PspCmPacketType::CONTROL;
-					msg.data.assign(pk.net_data, pk.net_data + pklen);
-				} else {
-					msg.packetType = PspCmPacketType::BULK;
-					msg.data.assign(pk.bulk_data, pk.bulk_data + (pklen - 4));
+				msg.endpoint = packet[3];
+				if (!ParsePacket(packet, msg.packetType)) {
+					WARN_LOG(Log::HLE, "pspcm_manager: malformed packet for endpoint %02x dropped", msg.endpoint);
+					continue;
+				}
+				if (msg.packetType != PspCmPacketType::IN_REQUEST) {
+					msg.data = std::move(packet);
 				}
 				Push(std::move(msg));
 			}

@@ -90,14 +90,10 @@ static std::deque<u32> usbPendingRecv[USB_LINK_MAX_ENDPOINTS];
 // Device to host data waits until the host asks for it on that endpoint, like on a real bus. The host
 // asks once per endpoint and waits for the answer, usbHostWaiting collapses the repeated asks.
 static bool usbHostWaiting[USB_LINK_MAX_ENDPOINTS];
-// What waits to be sent to the host, one queue per IN endpoint (1: bulk IN 0x81, 3: interrupt IN 0x83).
-// An entry goes out when the host asks for data on its endpoint, in the order they were queued.
-struct UsbInEntry {
-	u32 reqAddr = 0;       // a sceUsbbdReqSend request of the driver, or 0:
-	std::vector<u8> data;  // data the app wrote to "usbpspcm0:"
-};
-static std::deque<UsbInEntry> usbInQueue[USB_LINK_MAX_ENDPOINTS];
-static const size_t USB_IN_QUEUE_MAX = 256; // of the writes of the app
+// The sceUsbbdReqSend requests of the driver waiting to be sent to the host, one queue per IN endpoint
+// (1: bulk IN 0x81, 3: interrupt IN 0x83). One goes out when the host asks for data on its endpoint,
+// in the order they were queued.
+static std::deque<u32> usbInQueue[USB_LINK_MAX_ENDPOINTS];
 
 enum UsbStatus {
 	USB_STATUS_STOPPED      = 0x001,
@@ -186,21 +182,6 @@ static void UsbUpdateState() {
 		hleReSchedule("usb state change");
 }
 
-static void send_to_ps3(const char *buf, int len) {
-	UsbLink().Send(buf, len);
-
-	// TODO: HACK: transfer the bulk IN req from host to psp and start this thread based on that:
-	//if (buf[4] == 0x41 && buf[5] == 0x02) {
-	//if (len == 4) {
-	//	ERROR_LOG(Log::HLE, "pspcm_manager: sceKernelStartThread(0x184)");
-	//	sceKernelStartThread(0x184, 0, 0);
-	//}
-}
-
-static void UsbLinkSendToHost(int endpoint, const u8 *data, u32 size) {
-	UsbLink().SendToHost(endpoint, data, size);
-}
-
 // Everything below runs on the CPU thread.
 
 static void UsbLinkCallDriver(u32 func, u32 arg0, u32 arg1, u32 arg2) {
@@ -255,18 +236,9 @@ static void UsbLinkServeIn(int endpoint, bool inHle) {
 	if (!usbHostWaiting[endpoint] || usbInQueue[endpoint].empty()) {
 		return;
 	}
-	UsbInEntry entry = std::move(usbInQueue[endpoint].front());
+	const u32 reqAddr = usbInQueue[endpoint].front();
 	usbInQueue[endpoint].pop_front();
 
-	if (entry.reqAddr == 0) {
-		// Written by the app.
-		usbHostWaiting[endpoint] = false;
-		INFO_LOG(Log::HLE, "pspcm: %d bytes written by the app sent on endpoint 0x%02x", (int)entry.data.size(), endpoint | 0x80);
-		UsbLinkSendToHost(endpoint | 0x80, entry.data.data(), (u32)entry.data.size());
-		return;
-	}
-
-	const u32 reqAddr = entry.reqAddr;
 	auto req = PSPPointer<UsbdDeviceRequest>::Create(reqAddr);
 	if (!req.IsValid()) {
 		return;
@@ -278,7 +250,7 @@ static void UsbLinkServeIn(int endpoint, bool inHle) {
 	const bool validData = size > 0 && Memory::IsValidRange(req->data, size);
 	const u8 *data = validData ? Memory::GetPointerUnchecked(req->data) : &noData;
 	// The USB address the host knows: the endpoint number plus the direction.
-	UsbLinkSendToHost(endpoint | 0x80, data, validData ? size : 0);
+	UsbLink().SendToHost(endpoint | 0x80, data, validData ? size : 0);
 
 	req->transmitted = validData ? size : 0;
 	req->returnCode = (size > 0 && !validData) ? SCE_KERNEL_ERROR_ILLEGAL_ADDR : 0;
@@ -306,110 +278,19 @@ static void UsbLinkSendControlReply(const u8 *data, u32 size) {
 	reply[2] = (char)(12 + replySize);
 	reply[10] = (char)(replySize & 0xff);
 	reply[11] = (char)(replySize >> 8);
-	send_to_ps3(reply, 12 + replySize);
+	UsbLink().Send(reply, 12 + replySize);
 }
 
 // Acknowledges a host to device control request, with or without data: the header only.
 static void UsbLinkSendAck() {
 	const char ack[] = { (char)0xf0, 0x0f, 0x04, 0x00 };
-	send_to_ps3(ack, sizeof(ack));
+	UsbLink().Send(ack, sizeof(ack));
 }
 
-// The standard requests are answered by the usbd stack, not by the driver: the descriptors come from
-// the tables the driver registered, if it registered some. The host asks for them when the connection is made.
-//
-// Layout of what a driver registers (the PSPSDK structs, little endian, pointers are guest addresses):
-//   device descriptor: the 18 bytes of the USB descriptor.
-//   config: 9 bytes of the USB descriptor, padding, u32 settings -> array of { u32 interfaces, u32 count }.
-//   interface: 9 bytes of the USB descriptor, padding, u32 endpoints, u32 extra, u32 extraLength (24 bytes).
-//   endpoint: 7 bytes of the USB descriptor, padding, u32 extra, u32 extraLength (16 bytes).
-static const u32 USB_CONFIG_SETTINGS_OFFSET = 12;
-static const u32 USB_INTERFACE_STRIDE = 24;
-static const u32 USB_ENDPOINT_STRIDE = 16;
-static const u32 USB_MAX_EXTRA = 0x40;
-
-static bool UsbReadGuest(u32 addr, void *out, u32 size) {
-	if (addr == 0 || !Memory::IsValidRange(addr, size)) {
-		return false;
-	}
-	Memory::Memcpy(out, addr, size, "UsbDescriptor");
-	return true;
-}
-
-static void UsbAppendExtra(std::vector<u8> &out, u32 extraAddr, u32 extraLen) {
-	if (extraAddr == 0 || extraLen == 0 || extraLen > USB_MAX_EXTRA) {
-		return;
-	}
-	std::vector<u8> extra(extraLen);
-	if (UsbReadGuest(extraAddr, extra.data(), extraLen)) {
-		out.insert(out.end(), extra.begin(), extra.end());
-	}
-}
-
-static bool UsbBuildDeviceDescriptor(u32 addr, std::vector<u8> &out) {
-	u8 desc[18];
-	if (!UsbReadGuest(addr, desc, sizeof(desc)) || desc[0] != 18 || desc[1] != 1) {
-		return false;
-	}
-	out.assign(desc, desc + sizeof(desc));
-	return true;
-}
-
-// Flattens the config, its interfaces and endpoints into the bytes a host reads.
-static bool UsbBuildConfigDescriptor(u32 addr, std::vector<u8> &out) {
-	u8 cfg[9];
-	if (!UsbReadGuest(addr, cfg, sizeof(cfg)) || cfg[0] != 9 || cfg[1] != 2) {
-		return false;
-	}
-	const u32 numInterfaces = cfg[4];
-	u32 settings = 0;
-	UsbReadGuest(addr + USB_CONFIG_SETTINGS_OFFSET, &settings, 4);
-	if (numInterfaces == 0 || numInterfaces > 8 || settings == 0) {
-		return false;
-	}
-
-	out.assign(cfg, cfg + sizeof(cfg));
-	for (u32 i = 0; i < numInterfaces; ++i) {
-		u32 ifaces = 0, count = 0;
-		if (!UsbReadGuest(settings + i * 8, &ifaces, 4) || !UsbReadGuest(settings + i * 8 + 4, &count, 4) || count == 0 || count > 8) {
-			return false;
-		}
-		for (u32 j = 0; j < count; ++j) {
-			const u32 ifaceAddr = ifaces + j * USB_INTERFACE_STRIDE;
-			u8 iface[9];
-			u32 endpoints = 0, extra = 0, extraLen = 0;
-			if (!UsbReadGuest(ifaceAddr, iface, sizeof(iface)) || iface[0] != 9 || iface[1] != 4 || iface[4] > 16) {
-				return false;
-			}
-			UsbReadGuest(ifaceAddr + 12, &endpoints, 4);
-			UsbReadGuest(ifaceAddr + 16, &extra, 4);
-			UsbReadGuest(ifaceAddr + 20, &extraLen, 4);
-			out.insert(out.end(), iface, iface + sizeof(iface));
-			UsbAppendExtra(out, extra, extraLen);
-
-			for (u32 k = 0; k < iface[4]; ++k) {
-				const u32 epAddr = endpoints + k * USB_ENDPOINT_STRIDE;
-				u8 ep[7];
-				u32 epExtra = 0, epExtraLen = 0;
-				if (!UsbReadGuest(epAddr, ep, sizeof(ep)) || ep[0] != 7 || ep[1] != 5) {
-					return false;
-				}
-				UsbReadGuest(epAddr + 8, &epExtra, 4);
-				UsbReadGuest(epAddr + 12, &epExtraLen, 4);
-				out.insert(out.end(), ep, ep + sizeof(ep));
-				UsbAppendExtra(out, epExtra, epExtraLen);
-			}
-		}
-	}
-	// The total length covers what was flattened.
-	out[2] = (u8)(out.size() & 0xff);
-	out[3] = (u8)(out.size() >> 8);
-	return true;
-}
-
-// usbpspcm.prx registers no descriptor tables (devp and confp are 0, only the interface string is
-// there): the bus describes the device it was activated for. These are the descriptors of the
-// product id 0x01cb, "PSP Type D" by Sony, with 3 endpoints: bulk IN 1, bulk OUT 2, interrupt IN 3.
+// The standard requests are answered by the usbd stack, not by the driver. usbpspcm.prx registers no
+// descriptor tables (devp and confp are 0, only the interface string is there): the bus describes the
+// device it was activated for. These are the descriptors of the product id 0x01cb, "PSP Type D" by Sony,
+// with 3 endpoints: bulk IN 1, bulk OUT 2, interrupt IN 3.
 static const u8 usbPspcmDevice[] = {
 	18, 1, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0x4c, 0x05, 0xcb, 0x01, 0x00, 0x01, 1, 2, 0, 1,
 };
@@ -421,22 +302,11 @@ static const u8 usbPspcmConfig[] = {
 	7, 5, 0x83, 0x03, 0x08, 0x00, 0x08,                         // interrupt IN
 };
 
-// What the driver registered, or what the bus knows when it registered nothing.
-static bool UsbGetDeviceDescriptor(const PspUsbDriver *drv, std::vector<u8> &out) {
-	const u32 addr = drv->devp_hi ? drv->devp_hi : drv->devp;
-	if (addr != 0 && UsbBuildDeviceDescriptor(addr, out)) {
-		return true;
+static bool UsbReadGuest(u32 addr, void *out, u32 size) {
+	if (addr == 0 || !Memory::IsValidRange(addr, size)) {
+		return false;
 	}
-	out.assign(usbPspcmDevice, usbPspcmDevice + sizeof(usbPspcmDevice));
-	return true;
-}
-
-static bool UsbGetConfigDescriptor(const PspUsbDriver *drv, std::vector<u8> &out) {
-	const u32 addr = drv->confp_hi ? drv->confp_hi : drv->confp;
-	if (addr != 0 && UsbBuildConfigDescriptor(addr, out)) {
-		return true;
-	}
-	out.assign(usbPspcmConfig, usbPspcmConfig + sizeof(usbPspcmConfig));
+	Memory::Memcpy(out, addr, size, "UsbDescriptor");
 	return true;
 }
 
@@ -448,14 +318,12 @@ static bool UsbBuildStringDescriptor(const PspUsbDriver *drv, u32 index, std::ve
 		return true;
 	}
 
-	std::vector<u8> cfg;
+	// The string of the interface of the built-in configuration.
 	u8 ifaceString = 0;
-	if (UsbGetConfigDescriptor(drv, cfg)) {
-		for (size_t pos = 9; pos + 9 <= cfg.size() && cfg[pos] >= 2; pos += cfg[pos]) {
-			if (cfg[pos + 1] == 4) {
-				ifaceString = cfg[pos + 8];
-				break;
-			}
+	for (size_t pos = 9; pos + 9 <= sizeof(usbPspcmConfig) && usbPspcmConfig[pos] >= 2; pos += usbPspcmConfig[pos]) {
+		if (usbPspcmConfig[pos + 1] == 4) {
+			ifaceString = usbPspcmConfig[pos + 8];
+			break;
 		}
 	}
 
@@ -500,10 +368,12 @@ static void UsbLinkHandleStandardRequest(const PspUsbDriver *drv, const std::vec
 		bool ok = false;
 		switch (type) {
 		case 1: // device desc
-			ok = UsbGetDeviceDescriptor(drv, desc);
+			desc.assign(usbPspcmDevice, usbPspcmDevice + sizeof(usbPspcmDevice));
+			ok = true;
 			break;
 		case 2: // config desc
-			ok = UsbGetConfigDescriptor(drv, desc);
+			desc.assign(usbPspcmConfig, usbPspcmConfig + sizeof(usbPspcmConfig));
+			ok = true;
 			break;
 		case 3: // string desc
 			ok = UsbBuildStringDescriptor(drv, index, desc);
@@ -658,31 +528,10 @@ static void UsbLinkStop() {
 }
 
 
-// usbpspcm.prx registers a thread (sceIoDevctl 0x03415001) that is started once the USB is
-// activated. It is started with 8 bytes of arguments: 0, then flags saying the USB is connected.
-static int usbRegisteredThread = -1;
-static bool usbRegisteredThreadStarted = false;
-static u32 usbStartThreadParams = 0;
-
-void __UsbRegisterThread(int threadId) {
-	usbRegisteredThread = threadId;
-	usbRegisteredThreadStarted = false;
-}
-
-void __UsbUnregisterThread(int threadId) {
-	if (usbRegisteredThread == threadId) {
-		usbRegisteredThread = -1;
-		usbRegisteredThreadStarted = false;
-	}
-}
-
 void __UsbInit() {
 	usbStarted = false;
 	usbConnected = true;
 	usbActivated = false;
-	usbRegisteredThread = -1;
-	usbRegisteredThreadStarted = false;
-	usbStartThreadParams = 0;
 	waitingThreads.clear();
 
 	usbWaitTimer = CoreTiming::RegisterEvent("UsbWaitTimeout", UsbWaitExecTimeout);
@@ -735,13 +584,13 @@ void __UsbDoState(PointerWrap &p) {
 	}
 
 	if (s >= 6) {
-		Do(p, usbRegisteredThread);
-		Do(p, usbRegisteredThreadStarted);
-		Do(p, usbStartThreadParams);
-	} else {
-		usbRegisteredThread = -1;
-		usbRegisteredThreadStarted = false;
-		usbStartThreadParams = 0;
+		// Version 6 saved the thread usbpspcm.prx registered, the driver keeps that now.
+		int registeredThread = -1;
+		bool registeredThreadStarted = false;
+		u32 startThreadParams = 0;
+		Do(p, registeredThread);
+		Do(p, registeredThreadStarted);
+		Do(p, startThreadParams);
 	}
 
 	if (p.mode == PointerWrap::MODE_READ) {
@@ -832,8 +681,6 @@ static int sceUsbActivate(u32 pid) {
 static int sceUsbDeactivate() {
 	INFO_LOG(Log::HLE, "sceUsbDeactivate()");
 	usbActivated = false;
-	// Activating again starts the registered thread again (if it ended).
-	usbRegisteredThreadStarted = false;
 	UsbUpdateState();
 
 	if (UsbLinkRunning()) {
@@ -929,16 +776,6 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 		}
 		req.NotifyRead("sceUsbbdReqSend");
 		
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend: endpointPtr=0x%02x", req->endpointPtr);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        data=0x%02x", req->data);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        size=0x%02x", req->size);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   isCtrlReq=0x%02x", req->isControlRequest);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:   onComplCb=0x%02x", req->onComplete_func);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend: transmitted=0x%02x", req->transmitted);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:  returnCode=0x%02x", req->returnCode);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend: nextRequest=0x%02x", req->nextRequest);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:         arg=0x%02x", req->arg);
-		//INFO_LOG(Log::HLE, "        sceUsbbdReqSend:        link=0x%02x", req->link);
 
 		const UsbEndpoint *ep = (const UsbEndpoint *)Memory::GetPointerUnchecked(req->endpointPtr);
 		const int endpoint = ep->endpointAddres & 0xf;
@@ -957,9 +794,7 @@ static int sceUsbbdReqSend(u32 usbDeviceReqAddr) {
 		} else {
 			// Waits for the host to ask for it. It completes when it's sent.
 			if (endpoint < USB_LINK_MAX_ENDPOINTS) {
-				UsbInEntry entry;
-				entry.reqAddr = reqAddr;
-				usbInQueue[endpoint].push_back(std::move(entry));
+				usbInQueue[endpoint].push_back(reqAddr);
 				const u32 next = req->nextRequest;
 				UsbLinkServeIn(endpoint, true);
 				reqAddr = next;
@@ -988,20 +823,9 @@ static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 
 	req.NotifyRead("sceUsbbdReqRecv");
 
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: endpointPtr=0x%02x", req->endpointPtr);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        data=0x%02x", req->data);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        size=0x%02x", req->size);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   isCtrlReq=0x%02x", req->isControlRequest);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:   onComplCb=0x%02x", req->onComplete_func);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: transmitted=0x%02x", req->transmitted);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:  returnCode=0x%02x", req->returnCode);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: nextRequest=0x%02x", req->nextRequest);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:         arg=0x%02x", req->arg);
-	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv:        link=0x%02x", req->link);
 
 	const UsbEndpoint *ep = (const UsbEndpoint *)Memory::GetPointerUnchecked(req->endpointPtr);
 	const int endpoint = ep->endpointAddres & 0xf;
-	//INFO_LOG(Log::HLE, "sceUsbbdReqRecv: ep=0x%02x/0x%02x/0x%02x, sz=0x%x", ep->endpointAddres, ep->unk1, ep->unk2, req->size);
 
 	if (endpoint != 0) {
 		// Data the host sent already, or the request waits for it (see UsbLinkOnConnect).
@@ -1050,27 +874,6 @@ static int sceUsbbdRegister(u32 usbDrvAddr) {
 		usbDrv.NotifyRead("sceUsbbdRegister");
 	}
 	INFO_LOG(Log::HLE, "sceUsbbdRegister name : %s", Memory::GetPointerOrException(Usbd::getUsbDriver()->name));
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister endpoints : %d", Usbd::getUsbDriver()->endpoints);
-	//for (int i = 0; i < Usbd::getUsbDriver()->endpoints; i++) {
-	//	auto& ep = PSPPointer<UsbEndpoint>::Create(Usbd::getUsbDriver()->endp)[i];
-	//	INFO_LOG(Log::HLE, "       endp[%d] : %02x %02x %02x", i, ep.endpointAddres, ep.unk1, ep.unk2);
-	//}
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister devp_hi : %x", Usbd::getUsbDriver()->devp_hi);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister confp_hi : %x", Usbd::getUsbDriver()->confp_hi);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister devp : %x", Usbd::getUsbDriver()->devp);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister confp : %x", Usbd::getUsbDriver()->confp);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister str : %x", Usbd::getUsbDriver()->str);
-	//auto& strp = PSPPointer<u8>::Create(Usbd::getUsbDriver()->str);
-	//for (int i = 0; i < 0x1a; i++) {
-	//	INFO_LOG(Log::HLE, "       str[%d] : %02x", i, strp[i]);
-	//}
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister recvctl : %x", Usbd::getUsbDriver()->recvctl_func);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister intf_chang : %x", Usbd::getUsbDriver()->intf_chang_func);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister attach : %x", Usbd::getUsbDriver()->attach_func);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister detach : %x", Usbd::getUsbDriver()->detach_func);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister configure : %x", Usbd::getUsbDriver()->configure_func);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister start_func : %x", Usbd::getUsbDriver()->start_func);
-	//INFO_LOG(Log::HLE, "sceUsbbdRegister stop_func : %x", Usbd::getUsbDriver()->stop_func);
 	return 0;
 }
 
