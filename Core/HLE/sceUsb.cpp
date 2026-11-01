@@ -664,32 +664,9 @@ static int usbRegisteredThread = -1;
 static bool usbRegisteredThreadStarted = false;
 static u32 usbStartThreadParams = 0;
 
-static void UsbStartRegisteredThread() {
-	if (!usbActivated || usbRegisteredThreadStarted || usbRegisteredThread < 0) {
-		return;
-	}
-	if (usbStartThreadParams == 0) {
-		u32 size = 8;
-		u32 addr = kernelMemory.Alloc(size, false, "sceUsbPspcm thread parameters");
-		if (addr == 0 || addr == (u32)-1) {
-			ERROR_LOG(Log::HLE, "sceUsbPspcm: no memory for the thread parameters");
-			return;
-		}
-		usbStartThreadParams = addr;
-	}
-
-	const u32 params[2] = { 0, 0x80 | 0x01 }; // the second one: the USB is in connected state
-	Memory::Memcpy(usbStartThreadParams, params, sizeof(params), "UsbThreadParams");
-
-	usbRegisteredThreadStarted = true;
-	int ret = __KernelStartThread(usbRegisteredThread, 8, usbStartThreadParams);
-	INFO_LOG(Log::HLE, "sceUsbPspcm: started the registered thread 0x%x = %08x", usbRegisteredThread, ret);
-}
-
 void __UsbRegisterThread(int threadId) {
 	usbRegisteredThread = threadId;
 	usbRegisteredThreadStarted = false;
-	//UsbStartRegisteredThread();
 }
 
 void __UsbUnregisterThread(int threadId) {
@@ -848,7 +825,6 @@ static int sceUsbActivate(u32 pid) {
 	}
 
 	UsbUpdateState();
-	//UsbStartRegisteredThread();
 
 	return hleLogDebug(Log::HLE, 0);
 }
@@ -1010,7 +986,6 @@ static int sceUsbbdReqRecv(u32 usbDeviceReqAddr) {
 		return hleLogError(Log::HLE, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad request");
 	}
 
-	UsbStartRegisteredThread();
 	req.NotifyRead("sceUsbbdReqRecv");
 
 	//INFO_LOG(Log::HLE, "    sceUsbbdReqRecv: endpointPtr=0x%02x", req->endpointPtr);

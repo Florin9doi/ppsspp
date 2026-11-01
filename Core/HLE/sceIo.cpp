@@ -2403,13 +2403,12 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 	}
 
 	if (!strcmp(name, "usbpspcm:")) {
-		// All of it is the driver's: registering the thread, binding, ...
 		if (!IoDrvReady()) {
 			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_NODEV, "no driver registered");
 		}
 		u32 args[] = {
 			gIoDrvArgAddr + IODRV_DEVCTL_ARG_OFFSET, gIoDrvArgAddr + IODRV_DEVNAME_OFFSET,
-			(u32)cmd, argAddr, (u32)argLen, outPtr, (u32)outLen,
+				(u32)cmd, argAddr, (u32)argLen, outPtr, (u32)outLen
 		};
 		if (!IoDrvCall(IODRV_DEVCTL, ARRAY_SIZE(args), args, IoDrvCallKind::RESULT, -1)) {
 			return hleLogError(Log::sceIo, SCE_KERNEL_ERROR_ERRNO_FUNCTION_NOT_SUPPORTED, "the driver has no such function");
