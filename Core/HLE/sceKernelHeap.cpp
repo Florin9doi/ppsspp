@@ -274,7 +274,31 @@ static u32 sceKernelMemset(u32 addr, int value, u32 size) {
 
 // The POPS manager uses it to make a file descriptor it opened usable from user mode. Ours
 // aren't access-checked, so report no such UID and it skips that.
+//
+// usbpspcm.prx asks it about the thread an app registers with its devctl (0x03415001), and wants
+// the attribute (the u16 at 0x16 of the block) to have bit 1 when the caller is in user mode: the
+// thread is the app's to use. Only a thread gets a block for that, with a UID, and that attribute.
 static int sceKernelGetUIDcontrolBlock(SceUID uid, u32 controlBlockPtr) {
+	int type = 0;
+	if (kernelObjects.GetIDType(uid, &type) && type == SCE_KERNEL_TMID_Thread && Memory::IsValidRange(controlBlockPtr, 4)) {
+		// One block is enough: the caller reads it right away. It is made again if the memory went
+		// away (a state was loaded).
+		static u32 controlBlockAddr = 0;
+		const u32 blockSize = 0x20;
+		if (controlBlockAddr == 0 || kernelMemory.IsBlockFree(controlBlockAddr)) {
+			u32 size = blockSize;
+			controlBlockAddr = kernelMemory.Alloc(size, false, "UIDcontrolBlock");
+			if (controlBlockAddr == (u32)-1) {
+				controlBlockAddr = 0;
+				return hleLogError(Log::sceKernel, SCE_KERNEL_ERROR_NO_MEMORY, "no memory for a control block");
+			}
+		}
+		Memory::Memset(controlBlockAddr, 0, blockSize, "UIDcontrolBlock");
+		Memory::WriteUnchecked_U32(uid, controlBlockAddr + 0x0C);
+		Memory::WriteUnchecked_U16(0x0002, controlBlockAddr + 0x16);
+		Memory::WriteUnchecked_U32(controlBlockAddr, controlBlockPtr);
+		return hleLogDebug(Log::sceKernel, 0, "a block for the thread");
+	}
 	return hleLogDebug(Log::sceKernel, SCE_KERNEL_ERROR_UNKNOWN_UID, "no control blocks");
 }
 
