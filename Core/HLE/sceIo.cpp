@@ -2869,6 +2869,20 @@ static int sceIoAddDrv(u32 drvAddr) {
 	const char *name = Memory::IsValidAddress(drv.name) ? Memory::GetCharPointer(drv.name) : "";
 	INFO_LOG(Log::sceIo, "sceIoAddDrv(%08x): name = %s, dev_type = %08x, unk2 = %08x, funcs = %08x", drvAddr, name, drv.dev_type, drv.unk2, drv.funcs);
 
+	// The table of functions (PspIoDrvFuncs): 22 pointers.
+	static const char *const funcNames[22] = {
+		"IoInit", "IoExit", "IoOpen", "IoClose", "IoRead", "IoWrite", "IoLseek", "IoIoctl",
+		"IoRemove", "IoMkdir", "IoRmdir", "IoDopen", "IoDread", "IoDclose", "IoGetstat", "IoChstat",
+		"IoRename", "IoChdir", "IoMount", "IoUmount", "IoDevctl", "IoUnk21",
+	};
+	if (Memory::IsValidRange(drv.funcs, 22 * 4)) {
+		for (u32 i = 0; i < 22; ++i) {
+			INFO_LOG(Log::sceIo, "    funcs[%2d] %-8s = %08x", i, funcNames[i], Memory::ReadUnchecked_U32(drv.funcs + 4 * i));
+		}
+	} else {
+		WARN_LOG(Log::sceIo, "    funcs = %08x: the table isn't in valid memory", drv.funcs);
+	}
+
 	// Only the one of usbpspcm.prx is used for now.
 	if (strcmp(name, IODRV_USBPSPCM_NAME) != 0 || !Memory::IsValidAddress(drv.funcs + 4 * IODRV_WRITE)) {
 		WARN_LOG(Log::sceIo, "sceIoAddDrv: ignoring driver %s", name);
