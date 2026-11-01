@@ -753,6 +753,9 @@ private:
 	int fd_ = -1;
 };
 
+// The id of the action type, which is only registered when the first call is made: ids a save state
+// gives to the other modules' actions (sceMpeg's PostPutAction, ...) are restored over the ones handed out
+// at startup, so an id from __IoInit can end up being theirs. One taken later is past all of those.
 static int actionIoDrvCall = -1;
 
 void IoDrvCallAction::run(MipsCall &call) {
@@ -794,6 +797,9 @@ static bool IoDrvCall(IoDrvFunc index, int argc, const u32 *args, IoDrvCallKind 
 		ERROR_LOG(Log::sceIo, "usbpspcm: the driver has no function %d (%08x)", (int)index, func);
 		return false;
 	}
+	if (actionIoDrvCall < 0) {
+		actionIoDrvCall = __KernelRegisterActionType(IoDrvCallAction::Create);
+	}
 	IoDrvCallAction *action = (IoDrvCallAction *)__KernelCreateAction(actionIoDrvCall);
 	action->Set(kind, fd);
 	hleEnqueueCall(func, argc, args, action);
@@ -821,7 +827,7 @@ void __IoInit() {
 
 	__KernelListenThreadEnd(&TellFsThreadEnded);
 
-	actionIoDrvCall = __KernelRegisterActionType(IoDrvCallAction::Create);
+	actionIoDrvCall = -1;
 	gIoDrvIsPspCm = false;
 	gIoDrvAddr = 0;
 	gIoDrvArgAddr = 0;
@@ -950,8 +956,11 @@ void __IoDoState(PointerWrap &p) {
 		gIoDrvAddr = 0;
 		gIoDrvArgAddr = 0;
 		memset(&gIoDrv, 0, sizeof(gIoDrv));
+		actionIoDrvCall = -1;
 	}
-	__KernelRestoreActionType(actionIoDrvCall, IoDrvCallAction::Create);
+	if (actionIoDrvCall >= 0) {
+		__KernelRestoreActionType(actionIoDrvCall, IoDrvCallAction::Create);
+	}
 }
 
 static std::string IODetermineFilename(const FileNode *f) {
